@@ -287,6 +287,8 @@ struct RecordFailure {
     handle: u64,
     offset: usize,
     type_code: i16,
+    /// True when a failed auxiliary payload was retained as a validated raw record.
+    recoverable: bool,
     message: String,
 }
 
@@ -1820,6 +1822,7 @@ impl DwgDocumentBuilder {
                                     handle,
                                     offset,
                                     type_code,
+                                    recoverable: false,
                                     message: format!(
                                         "Could not read record at handle {handle:#X}, type_code={type_code}: {error}"
                                     ),
@@ -1860,6 +1863,19 @@ impl DwgDocumentBuilder {
                     if let Some(message) = reader.check_error().err().map(|e| e.to_string())
                         .or_else(|| result.err().map(|_| "Record decoder panicked".to_string()))
                     {
+                        let recovered = (raw_type_code >= 500
+                            && !entity_class_numbers.contains(&raw_type_code)
+                            && !is_entity_type(type_code)
+                            && Self::is_recoverable_auxiliary_class(
+                                &class_names, raw_type_code, type_code,
+                            ))
+                        .then(|| {
+                            self.recover_auxiliary_object(
+                                handle, raw_type_code, type_code, offset, &class_names,
+                            )
+                        })
+                        .flatten();
+                        let recoverable = recovered.is_some();
                         // Never commit fabricated entities or expose them to visitors.
                         chunk.output.entities.truncate(entity_start);
                         chunk.output.section_view_style = section_style;
@@ -1878,12 +1894,50 @@ impl DwgDocumentBuilder {
                             attributes.retain(|attribute| attribute.common.handle.value() != handle);
                         }
                         chunk.raw_records.retain(|(h, ..)| *h != handle);
+                        if let Some((object, common, scale)) = recovered {
+                            let object_handle = Handle::from(handle);
+                            if !common.common.eed_raw.is_empty() {
+                                chunk.output.eed_by_handle
+                                    .insert(object_handle, common.common.eed_raw.clone());
+                            }
+                            if let Some(xdic) = common.xdictionary_handle {
+                                chunk.output.xdic_by_handle
+                                    .insert(object_handle, Handle::from(xdic));
+                            }
+                            if !common.reactors.is_empty() {
+                                chunk.output.reactors_by_handle.insert(
+                                    object_handle,
+                                    common.reactors.iter().copied().map(Handle::from).collect(),
+                                );
+                            }
+                            if common.has_ds_data {
+                                chunk.output.dwg_data_store_handles.insert(object_handle);
+                            }
+                            if let Some(scale) = scale {
+                                chunk.output.context_scales.insert(object_handle, scale);
+                            }
+                            chunk.output.objects.insert(object_handle, object);
+                        }
                         chunk.failures.push(RecordFailure {
-                            code: "record-decode-failed",
+                            code: if recoverable {
+                                "auxiliary-object-preserved"
+                            } else {
+                                "record-decode-failed"
+                            },
                             handle,
                             offset,
                             type_code,
-                            message: format!("Invalid record at handle {handle:#X}, type_code={type_code}: {message}"),
+                            recoverable,
+                            message: if recoverable {
+                                let name = Self::unknown_object_type_name(&class_names, raw_type_code);
+                                format!(
+                                    "Preserved auxiliary object {name} at handle {handle:#X}, type_code={raw_type_code} as raw DWG data after decode failure: {message}"
+                                )
+                            } else {
+                                format!(
+                                    "Invalid record at handle {handle:#X}, type_code={type_code}: {message}"
+                                )
+                            },
                         });
                     }
                 }
@@ -1993,7 +2047,9 @@ impl DwgDocumentBuilder {
                         .append(&mut attributes);
                 }
                 for failure in chunk.failures {
-                    skipped_pass2 += 1;
+                    if !failure.recoverable {
+                        skipped_pass2 += 1;
+                    }
                     self.notifications
                         .notify(NotificationType::Error, failure.message.clone());
                     let mut diagnostic =
@@ -7324,6 +7380,74 @@ impl DwgDocumentBuilder {
         }
     }
 
+    /// Limit opaque recovery to the auxiliary schemas reported in #134.
+    fn is_recoverable_auxiliary_class(
+        class_names: &ClassNames,
+        raw_type_code: i16,
+        type_code: i16,
+    ) -> bool {
+        let name = class_names
+            .dxf
+            .get(&raw_type_code)
+            .or_else(|| class_names.dxf.get(&type_code))
+            .map(|name| name.to_ascii_uppercase());
+        matches!(
+            name.as_deref(),
+            Some(
+                "ACDB_MLEADEROBJECTCONTEXTDATA_CLASS"
+                    | "ACDBASSOCGEOMDEPENDENCY"
+                    | "ASSOCGEOMDEPENDENCY"
+                    | "ACDBASSOCEDGEACTIONPARAM"
+                    | "ASSOCEDGEACTIONPARAM"
+            )
+        )
+    }
+
+    /// Validate framing and common metadata independently of the failed payload.
+    fn recover_auxiliary_object(
+        &self,
+        handle: u64,
+        raw_type_code: i16,
+        type_code: i16,
+        offset: usize,
+        class_names: &ClassNames,
+    ) -> Option<(
+        crate::objects::ObjectType,
+        crate::io::dwg::dwg_stream_readers::object_reader::NonEntityCommonData,
+        Option<Handle>,
+    )> {
+        let (actual_type, mut reader) = self.obj_reader.read_record_at(offset).ok()?;
+        if actual_type != raw_type_code {
+            return None;
+        }
+        let common = self
+            .obj_reader
+            .read_common_non_entity_data(&mut reader, type_code);
+        if common.common.handle != handle || reader.check_error().is_err() {
+            return None;
+        }
+        // The scale is the first class-specific handle; reading it does not
+        // depend on the MLeader context's data-stream layout.
+        let scale = class_names
+            .dxf
+            .get(&raw_type_code)
+            .filter(|name| name.eq_ignore_ascii_case("ACDB_MLEADEROBJECTCONTEXTDATA_CLASS"))
+            .and_then(|_| {
+                let scale = Handle::from(reader.read_handle());
+                (reader.check_error().is_ok() && !scale.is_null()).then_some(scale)
+            });
+        let object = crate::objects::ObjectType::Unknown {
+            type_name: Self::unknown_object_type_name(class_names, raw_type_code),
+            handle: Handle::from(handle),
+            owner: Handle::from(common.owner_handle),
+            raw_dxf_codes: None,
+            raw_dwg_data: Some(reader.raw_merged_data()),
+            raw_dwg_handle_bits: reader.get_handle_bits(),
+            raw_dwg_version: Some(self.obj_reader.dxf_version()),
+        };
+        Some((object, common, scale))
+    }
+
     /// Name an unsupported object by its CLASSES-section dxfname when the
     /// drawing's class map knows it, falling back to the positional code.
     fn unknown_object_type_name(class_names: &ClassNames, raw_type_code: i16) -> String {
@@ -7390,6 +7514,34 @@ mod tests {
             ),
             "IRD_OBJ_RECORD"
         );
+    }
+
+    #[test]
+    fn auxiliary_class_filter_is_narrow() {
+        let mut document = CadDocument::new();
+        document.classes.clear();
+        for (number, name) in [
+            (540, "ACDB_MLEADEROBJECTCONTEXTDATA_CLASS"),
+            (541, "ACDBASSOCGEOMDEPENDENCY"),
+            (542, "ACDBASSOCEDGEACTIONPARAM"),
+        ] {
+            let mut class = DxfClass::new(name, name);
+            class.class_number = number;
+            document.classes.push_preserving(class);
+        }
+        let names = ClassNames::from_document(&document);
+        assert!(DwgDocumentBuilder::is_recoverable_auxiliary_class(
+            &names, 540, 540
+        ));
+        assert!(DwgDocumentBuilder::is_recoverable_auxiliary_class(
+            &names, 541, 541
+        ));
+        assert!(DwgDocumentBuilder::is_recoverable_auxiliary_class(
+            &names, 542, 542
+        ));
+        assert!(!DwgDocumentBuilder::is_recoverable_auxiliary_class(
+            &names, 543, 543
+        ));
     }
 
     #[test]

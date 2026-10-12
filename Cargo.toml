@@ -279,6 +279,11 @@ path = "tests/issue132_colors.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "issue134"
+path = "tests/issue134.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "issue41"
 path = "tests/issue41.rs"
 required-features = ["writers"]

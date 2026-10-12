@@ -388,6 +388,11 @@ pub struct DwgPageCrcInfo {
 /// * Missing pages in a section are skipped instead of aborting.
 /// * Skipped records and sections are reported through the
 ///   [`CadDocument::notifications`](crate::document::CadDocument::notifications) collection.
+///
+/// MLeader annotation contexts, associative geometry dependencies, and edge
+/// action parameters with unsupported payload layouts are preserved as raw DWG
+/// objects with diagnostics even in strict mode, if their framing and common
+/// object metadata are valid. Same-version DWG saves retain those records.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgReadOptions {
@@ -1440,7 +1445,8 @@ impl<R: Read + Seek> DwgReader<R> {
                         decoded_source_records = build_outcome.decoded_records;
                         skipped_source_records = build_outcome.skipped_records;
                         if !failsafe && skipped_source_records != 0 {
-                            return Err(DxfError::Parse(build_outcome.diagnostics.first()
+                            return Err(DxfError::Parse(build_outcome.diagnostics.iter()
+                                .find(|diagnostic| diagnostic.code != "auxiliary-object-preserved")
                                 .map(|diagnostic| diagnostic.message.clone())
                                 .unwrap_or_else(|| "Invalid DWG object records".to_string())));
                         }
