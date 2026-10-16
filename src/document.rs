@@ -31,6 +31,14 @@ use crate::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// Block-record position by handle (this fork, patch F17); see
+/// `CadDocument::block_record_index`.
+pub(crate) struct BlockRecordIndex {
+    by_handle: HashMap<Handle, usize>,
+    /// `block_records.len()` when built; a change triggers a rebuild.
+    len: usize,
+}
+
 #[cfg(test)]
 #[path = "document/evaluated_block_tests.rs"]
 mod evaluated_block_tests;
@@ -3016,11 +3024,44 @@ impl CadDocument {
         removed
     }
 
+    /// Block-record positions by handle for bulk loaders (this fork,
+    /// patch F17): `add_entity` scans every block record for every entity,
+    /// which is O(entities × blocks) on block-heavy DXF files.
+    pub(crate) fn block_record_index(&self) -> BlockRecordIndex {
+        let mut by_handle = HashMap::new();
+        for (position, record) in self.block_records.iter().enumerate() {
+            // The first record with a handle wins, as in the linear scan.
+            by_handle.entry(record.handle).or_insert(position);
+        }
+        BlockRecordIndex {
+            by_handle,
+            len: self.block_records.len(),
+        }
+    }
+
+    /// [`add_entity`](Self::add_entity) that finds the owning block record
+    /// through `index` instead of a linear scan; same result, same order.
+    pub(crate) fn add_entity_indexed(
+        &mut self,
+        entity: EntityType,
+        index: &mut BlockRecordIndex,
+    ) -> Result<Handle> {
+        self.add_entity_routed(entity, Some(index))
+    }
+
     /// Add an entity to the document (model space).
     ///
     /// The entity is stored in both the flat entity map (used by the DXF
     /// writer) and the *Model_Space block record (used by the DWG writer).
-    pub fn add_entity(&mut self, mut entity: EntityType) -> Result<Handle> {
+    pub fn add_entity(&mut self, entity: EntityType) -> Result<Handle> {
+        self.add_entity_routed(entity, None)
+    }
+
+    fn add_entity_routed(
+        &mut self,
+        mut entity: EntityType,
+        index: Option<&mut BlockRecordIndex>,
+    ) -> Result<Handle> {
         entity.common_mut().raw_record = None;   // (re)placed in the document: owner/handle may differ from the source bytes
         // Allocate a handle if the entity doesn't have one
         let handle = if entity.common().handle.is_null() {
@@ -3069,11 +3110,26 @@ impl CadDocument {
         let owner = entity.common().owner_handle;
         let mut added_to_block = false;
         if !is_excluded && !owner.is_null() {
-            for br in self.block_records.iter_mut() {
-                if br.handle == owner {
-                    br.entity_handles.push(handle);
-                    added_to_block = true;
-                    break;
+            match index {
+                Some(index) => {
+                    if index.len != self.block_records.len() {
+                        *index = self.block_record_index();
+                    }
+                    if let Some(&position) = index.by_handle.get(&owner) {
+                        if let Some(br) = self.block_records.get_index_mut(position) {
+                            br.entity_handles.push(handle);
+                            added_to_block = true;
+                        }
+                    }
+                }
+                None => {
+                    for br in self.block_records.iter_mut() {
+                        if br.handle == owner {
+                            br.entity_handles.push(handle);
+                            added_to_block = true;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -5561,4 +5617,105 @@ fn valid_symbol_table_name(name: &str) -> bool {
                     '<' | '>' | '/' | '\\' | '"' | ':' | ';' | '?' | '*' | '|' | ',' | '=' | '`'
                 )
         })
+}
+
+/// This fork (F17): the indexed route into block records must give the
+/// same lists in the same order as the linear scan it replaces.
+#[cfg(test)]
+mod hardening_f17_tests {
+    use super::*;
+    use crate::entities::Line;
+    use crate::tables::BlockRecord;
+
+    fn line(handle: u64, owner: Handle) -> EntityType {
+        let mut line = Line::new();
+        line.common.handle = Handle::new(handle);
+        line.common.owner_handle = owner;
+        EntityType::Line(line)
+    }
+
+    fn block(name: &str, handle: u64) -> BlockRecord {
+        let mut record = BlockRecord::new(name);
+        record.handle = Handle::new(handle);
+        record
+    }
+
+    fn document_with_blocks() -> CadDocument {
+        let mut document = CadDocument::new();
+        document.block_records.add(block("B1", 0x100)).unwrap();
+        // Same handle as B1: the linear scan stops at the first record.
+        document.block_records.add(block("B2", 0x100)).unwrap();
+        document.block_records.add(block("B3", 0x101)).unwrap();
+        document
+    }
+
+    /// (record name, member handles, owner handle of each member)
+    fn memberships(document: &CadDocument) -> Vec<(String, Vec<u64>, Vec<u64>)> {
+        document
+            .block_records
+            .iter()
+            .map(|record| {
+                let members: Vec<u64> = record.entity_handles.iter().map(|h| h.value()).collect();
+                let owners = record
+                    .entity_handles
+                    .iter()
+                    .map(|h| document.get_entity(*h).unwrap().common().owner_handle.value())
+                    .collect();
+                (record.name.clone(), members, owners)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn indexed_routing_matches_the_linear_scan() {
+        let model_space = CadDocument::new().header.model_space_block_handle;
+        let owners = [
+            model_space,
+            Handle::new(0x100), // duplicated handle: B1 only
+            Handle::new(0x101),
+            Handle::new(0xDEAD), // unknown: falls back to *Model_Space
+            Handle::NULL,        // unowned: defaults to *Model_Space
+            Handle::new(0x100),
+            Handle::new(0x101),
+        ];
+        let mut linear = document_with_blocks();
+        let mut indexed = document_with_blocks();
+        let mut index = indexed.block_record_index();
+        for (i, owner) in owners.iter().enumerate() {
+            let handle = 0xA0 + i as u64;
+            linear.add_entity(line(handle, *owner)).unwrap();
+            indexed
+                .add_entity_indexed(line(handle, *owner), &mut index)
+                .unwrap();
+        }
+
+        let expected = memberships(&linear);
+        assert_eq!(memberships(&indexed), expected);
+        let members = |name: &str| {
+            expected
+                .iter()
+                .find(|(record, _, _)| record == name)
+                .map(|(_, members, _)| members.clone())
+                .unwrap()
+        };
+        assert_eq!(members("B1"), vec![0xA1, 0xA5]);
+        assert_eq!(members("B2"), Vec::<u64>::new());
+        assert_eq!(members("B3"), vec![0xA2, 0xA6]);
+        assert_eq!(members("*Model_Space"), vec![0xA0, 0xA3, 0xA4]);
+    }
+
+    #[test]
+    fn the_index_follows_block_records_added_after_it_was_built() {
+        let mut document = CadDocument::new();
+        let mut index = document.block_record_index();
+        document.block_records.add(block("LATE", 0x900)).unwrap();
+        document
+            .add_entity_indexed(line(0xA1, Handle::new(0x900)), &mut index)
+            .unwrap();
+        let late = document.block_records.get("LATE").unwrap();
+        assert_eq!(
+            late.entity_handles.iter().map(|h| h.value()).collect::<Vec<_>>(),
+            vec![0xA1]
+        );
+    }
 }

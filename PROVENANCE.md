@@ -55,6 +55,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | H5 | acadrust(H5): no over-read into zero padding; count page substitution | src/io/dwg/decompressor_ac21.rs; src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_h5_overread.rs | This fork (original work); policy D-3 (failsafe keeps page zero-fill, every event counted as page-zero-filled; strict errors) | tests/hardening_h5_overread.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
 | C1 | acadrust(C1): CancelToken checked at stage, page and batch boundaries | src/io/limits.rs; src/io/dwg/dwg_reader.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_c1_cancel.rs | This fork (original work) | tests/hardening_c1_cancel.rs |
 | H4 | acadrust(H4): clamp DXF HATCH 93, LTYPE 73 and DGN counts | src/io/dxf/reader/section_reader.rs; Cargo.toml; tests/hardening_h4_dxf.rs; tests/hardening/h4_*.dxf | This fork (original work); clamp pattern from upstream (HATCH pattern-boundary reader) | tests/hardening_h4_dxf.rs |
+| F17 | acadrust(F17): per-entity DXF failsafe; linear block membership | src/document.rs; src/tables/mod.rs; src/io/dxf/reader.rs; src/io/dxf/reader/section_reader.rs; src/io/dxf/reader/text_reader.rs; Cargo.toml; tests/hardening_f17_dxf.rs | This fork (original work) | tests/hardening_f17_dxf.rs (complexity test: --release --ignored); src/document.rs::hardening_f17_tests; src/io/dxf/reader/section_reader.rs::hardening_f17_tests |
 
 ## Limits (H2, H3)
 

@@ -443,6 +443,10 @@ path = "tests/hardening_c1_cancel.rs"
 name = "hardening_h4_dxf"
 path = "tests/hardening_h4_dxf.rs"
 
+[[test]]
+name = "hardening_f17_dxf"
+path = "tests/hardening_f17_dxf.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 

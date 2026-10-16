@@ -7,6 +7,7 @@ use super::stream_reader::{DxfStreamReader, PointReader};
 use crate::document::CadDocument;
 use crate::entities::*;
 use crate::error::Result;
+use crate::io::read::{ReadDiagnostic, ReadStage};
 use crate::objects::*;
 use crate::objects::{
     DetailViewStyle as ClassDetailViewStyle, SectionViewStyle as ClassSectionViewStyle,
@@ -1436,6 +1437,38 @@ enum MeshReadState {
 pub struct SectionReader<'a> {
     reader: &'a mut Box<dyn DxfStreamReader>,
     decoded_records: usize,
+    /// This fork (F17): skip a corrupt ENTITIES record instead of
+    /// abandoning the rest of the section.
+    entity_failsafe: bool,
+    skipped_records: usize,
+    diagnostics: Vec<ReadDiagnostic>,
+}
+
+/// `CadDocument` view used while reading ENTITIES (this fork, F17): its
+/// `add_entity` finds the owning block record through an index instead of
+/// scanning every block record for every entity.
+struct IndexedDocument<'d> {
+    document: &'d mut CadDocument,
+    owners: &'d mut crate::document::BlockRecordIndex,
+}
+
+impl IndexedDocument<'_> {
+    fn add_entity(&mut self, entity: EntityType) -> Result<Handle> {
+        self.document.add_entity_indexed(entity, self.owners)
+    }
+}
+
+impl std::ops::Deref for IndexedDocument<'_> {
+    type Target = CadDocument;
+    fn deref(&self) -> &CadDocument {
+        self.document
+    }
+}
+
+impl std::ops::DerefMut for IndexedDocument<'_> {
+    fn deref_mut(&mut self) -> &mut CadDocument {
+        self.document
+    }
 }
 
 impl<'a> SectionReader<'a> {
@@ -1444,11 +1477,78 @@ impl<'a> SectionReader<'a> {
         Self {
             reader,
             decoded_records: 0,
+            entity_failsafe: false,
+            skipped_records: 0,
+            diagnostics: Vec::new(),
         }
     }
 
     pub fn decoded_records(&self) -> usize {
         self.decoded_records
+    }
+
+    /// This fork (F17): in failsafe mode a corrupt ENTITIES record is
+    /// counted, reported and skipped up to the next `0` group.
+    pub fn set_entity_failsafe(&mut self, failsafe: bool) {
+        self.entity_failsafe = failsafe;
+    }
+
+    /// ENTITIES records skipped in failsafe mode.
+    pub fn skipped_records(&self) -> usize {
+        self.skipped_records
+    }
+
+    /// Diagnostics for the skipped records.
+    pub fn take_diagnostics(&mut self) -> Vec<ReadDiagnostic> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    fn skip_failed_entity(
+        &mut self,
+        entity_type: &str,
+        document: &mut CadDocument,
+        error: crate::error::DxfError,
+    ) -> Result<()> {
+        let message = format!("Skipped corrupt {} entity: {}", entity_type, error);
+        document.notifications.notify(
+            crate::notification::NotificationType::Error,
+            message.clone(),
+        );
+        let context = self.reader.diagnostic_context();
+        let mut diagnostic =
+            ReadDiagnostic::new("entity-read-failed", ReadStage::RecordStream, message);
+        diagnostic.section = Some("ENTITIES".to_string());
+        diagnostic.source_offset = context.source_offset;
+        diagnostic.source_offset_basis = Some("file-byte".to_string());
+        diagnostic.source_line = context.source_line;
+        diagnostic.record_handle = context.record_handle;
+        diagnostic.record_type = Some(entity_type.to_string());
+        crate::io::read::push_read_diagnostic(&mut self.diagnostics, diagnostic);
+        self.skipped_records = self.skipped_records.saturating_add(1);
+        // A reader that failed between `record_xdata(true)` and its take would
+        // leave the recorder on for every later record of the section.
+        self.reader.record_xdata(false);
+        self.skip_damaged_entity()
+    }
+
+    /// This fork (F17): skip to the next `0` group after a failed ENTITIES
+    /// record. Another unparsable group code inside the same record is part of
+    /// the damage (the text reader has consumed its pair, so each one makes
+    /// progress and the loop ends at the end of the file), any other error is a
+    /// real stream failure and stops the section as before.
+    fn skip_damaged_entity(&mut self) -> Result<()> {
+        loop {
+            match self.reader.read_pair() {
+                Ok(Some(pair)) if pair.code == 0 => {
+                    self.reader.push_back(pair);
+                    return Ok(());
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Ok(()),
+                Err(crate::error::DxfError::Parse(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Read the HEADER section
@@ -3560,6 +3660,7 @@ impl<'a> SectionReader<'a> {
 
     /// Read the ENTITIES section
     pub fn read_entities(&mut self, document: &mut CadDocument) -> Result<()> {
+        let mut owners = document.block_record_index();
         // Read entities until ENDSEC
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDSEC" {
@@ -3575,6 +3676,14 @@ impl<'a> SectionReader<'a> {
                 // two agree, and the length does not walk the whole list
                 // for every record.
                 let before = document.entities.len();
+
+                // This fork (F17): an entity's error ends only that entity
+                // in failsafe mode, and `add_entity` routes through `owners`.
+                let result = (|| -> Result<()> {
+                let document = &mut IndexedDocument {
+                    document: &mut *document,
+                    owners: &mut owners,
+                };
 
                 match entity_type.as_str() {
                     "POINT" => {
@@ -3849,6 +3958,16 @@ impl<'a> SectionReader<'a> {
                         let entity = self.read_unknown_entity(&entity_type)?;
                         let _ = document.add_entity(EntityType::Unknown(entity));
                     }
+                }
+                Ok(())
+                })();
+                if let Err(error) = result {
+                    // The caller's cancellation and byte budget are not file
+                    // corruption: they stop the read in failsafe mode too.
+                    if !self.entity_failsafe || error.is_resource_stop() {
+                        return Err(error);
+                    }
+                    self.skip_failed_entity(&entity_type, document, error)?;
                 }
                 self.decoded_records = self
                     .decoded_records
@@ -22001,5 +22120,146 @@ mod tests {
                 [0.0, 0.0, 0.0, 1.0],
             ]
         );
+    }
+}
+
+/// This fork (F17): how `read_entities` treats errors raised in the middle
+/// of a record, driven by a scripted pair stream.
+#[cfg(test)]
+mod hardening_f17_tests {
+    use super::*;
+    use crate::error::DxfError;
+    use crate::io::dxf::reader::stream_reader::DxfCodePair;
+    use std::cell::Cell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    type Step = Result<Option<DxfCodePair>>;
+
+    struct Scripted {
+        steps: VecDeque<Step>,
+        pending: Vec<DxfCodePair>,
+        /// Mirrors `XDataRecorder`'s recording flag for the tests.
+        recording: Rc<Cell<bool>>,
+    }
+
+    impl DxfStreamReader for Scripted {
+        fn read_pair(&mut self) -> Step {
+            if let Some(pair) = self.pending.pop() {
+                return Ok(Some(pair));
+            }
+            self.steps.pop_front().unwrap_or(Ok(None))
+        }
+        fn peek_code(&mut self) -> Result<Option<i32>> {
+            Ok(self.pending.last().map(|pair| pair.code))
+        }
+        fn push_back(&mut self, pair: DxfCodePair) {
+            self.pending.push(pair);
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn record_xdata(&mut self, on: bool) {
+            self.recording.set(on);
+        }
+    }
+
+    fn pair(code: i32, value: &str) -> Step {
+        Ok(Some(DxfCodePair::new(code, value.to_string())))
+    }
+
+    fn parse_error() -> Step {
+        Err(DxfError::Parse("scripted".to_string()))
+    }
+
+    /// Runs `read_entities` over `steps`; returns its result, the number of
+    /// entities added and the skipped-record count.
+    fn run(steps: Vec<Step>, failsafe: bool) -> (Result<()>, usize, usize) {
+        run_recording(steps, failsafe, Rc::new(Cell::new(false)))
+    }
+
+    fn run_recording(
+        steps: Vec<Step>,
+        failsafe: bool,
+        recording: Rc<Cell<bool>>,
+    ) -> (Result<()>, usize, usize) {
+        let mut stream: Box<dyn DxfStreamReader> = Box::new(Scripted {
+            steps: steps.into(),
+            pending: Vec::new(),
+            recording,
+        });
+        let mut document = CadDocument::new();
+        let mut reader = SectionReader::new(&mut stream);
+        reader.set_entity_failsafe(failsafe);
+        let result = reader.read_entities(&mut document);
+        (result, document.entities.len(), reader.skipped_records())
+    }
+
+    #[test]
+    fn a_caller_stop_in_a_record_is_not_a_corrupt_entity() {
+        for stop in [
+            DxfError::Cancelled,
+            DxfError::BudgetExceeded {
+                what: "scripted",
+                requested: 1,
+            },
+        ] {
+            let expected = stop.to_string();
+            let steps = vec![pair(0, "LINE"), pair(8, "0"), Err(stop), pair(0, "ENDSEC")];
+            let (result, entities, skipped) = run(steps, true);
+            assert_eq!(result.unwrap_err().to_string(), expected);
+            assert_eq!((entities, skipped), (0, 0), "{expected}");
+        }
+    }
+
+    #[test]
+    fn further_bad_group_codes_belong_to_the_skipped_record() {
+        let steps = vec![
+            pair(0, "LINE"),
+            pair(8, "0"),
+            parse_error(), // the failing record
+            pair(70, "1"),
+            parse_error(), // more damage inside the same record
+            parse_error(),
+            pair(0, "LINE"), // the next record is read normally
+            pair(8, "0"),
+            pair(0, "ENDSEC"),
+        ];
+        let (result, entities, skipped) = run(steps, true);
+        result.unwrap();
+        assert_eq!((entities, skipped), (1, 1));
+    }
+
+    #[test]
+    fn a_stream_failure_while_skipping_stops_the_section() {
+        let steps = vec![
+            pair(0, "LINE"),
+            parse_error(),
+            Err(DxfError::Io(std::io::Error::other("scripted"))),
+            pair(0, "LINE"),
+            pair(0, "ENDSEC"),
+        ];
+        let (result, entities, skipped) = run(steps, true);
+        assert!(matches!(result, Err(DxfError::Io(_))), "{result:?}");
+        assert_eq!((entities, skipped), (0, 1));
+    }
+
+    #[test]
+    fn a_skipped_record_leaves_xdata_recording_off() {
+        // A reader that failed after `record_xdata(true)` never reached its take.
+        let recording = Rc::new(Cell::new(true));
+        let steps = vec![pair(0, "LINE"), parse_error(), pair(0, "ENDSEC")];
+        let (result, _, skipped) = run_recording(steps, true, Rc::clone(&recording));
+        result.unwrap();
+        assert_eq!(skipped, 1);
+        assert!(!recording.get());
+    }
+
+    #[test]
+    fn strict_mode_returns_the_first_error() {
+        let steps = vec![pair(0, "LINE"), parse_error(), pair(0, "ENDSEC")];
+        let (result, entities, skipped) = run(steps, false);
+        assert!(matches!(result, Err(DxfError::Parse(_))), "{result:?}");
+        assert_eq!((entities, skipped), (0, 0));
     }
 }

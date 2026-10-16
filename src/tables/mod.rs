@@ -275,6 +275,11 @@ impl<T: TableEntry> Table<T> {
         self.entries.values_mut()
     }
 
+    /// Entry at iteration position `index` (this fork, patch F17).
+    pub(crate) fn get_index_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.entries.get_index_mut(index).map(|(_, entry)| entry)
+    }
+
     /// Get all entry names
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.values().map(|e| e.name())

@@ -299,8 +299,12 @@ impl DxfReader {
                             "BLOCKS" => {
                                 self.read_blocks_section(&mut document, &mut decoded_source_records)
                             }
-                            "ENTITIES" => self
-                                .read_entities_section(&mut document, &mut decoded_source_records),
+                            "ENTITIES" => self.read_entities_section(
+                                &mut document,
+                                &mut decoded_source_records,
+                                &mut skipped_source_records,
+                                &mut diagnostics,
+                            ),
                             "OBJECTS" => self
                                 .read_objects_section(&mut document, &mut decoded_source_records),
                             "ACDSDATA" => self.read_acdsdata_section(&mut document),
@@ -441,10 +445,18 @@ impl DxfReader {
         &mut self,
         document: &mut CadDocument,
         decoded_records: &mut usize,
+        skipped_records: &mut usize,
+        diagnostics: &mut Vec<ReadDiagnostic>,
     ) -> Result<()> {
+        let failsafe = self.config.failsafe;
         let mut section_reader = SectionReader::new(&mut self.reader);
+        section_reader.set_entity_failsafe(failsafe);
         let result = section_reader.read_entities(document);
         *decoded_records = decoded_records.saturating_add(section_reader.decoded_records());
+        *skipped_records = skipped_records.saturating_add(section_reader.skipped_records());
+        for diagnostic in section_reader.take_diagnostics() {
+            push_read_diagnostic(diagnostics, diagnostic);
+        }
         result
     }
 

@@ -117,18 +117,31 @@ impl<R: Read + Seek> DxfTextReader<R> {
         }
 
         // Parse code directly from byte buffer
-        let code_str = std::str::from_utf8(&self.line_buf).map_err(|_| {
-            DxfError::Parse(format!(
-                "Invalid UTF-8 in code at line {}",
-                self.line_number
-            ))
-        })?;
-        let code = code_str.trim().parse::<i32>().map_err(|_| {
-            DxfError::Parse(format!(
-                "Invalid DXF code at line {}: '{}'",
-                self.line_number, code_str
-            ))
-        })?;
+        let code_str = match std::str::from_utf8(&self.line_buf) {
+            Ok(code_str) => code_str,
+            Err(_) => {
+                let error = DxfError::Parse(format!(
+                    "Invalid UTF-8 in code at line {}",
+                    self.line_number
+                ));
+                // This fork (F17): same as an unparsable code below.
+                let _ = self.read_line()?;
+                return Err(error);
+            }
+        };
+        let code = match code_str.trim().parse::<i32>() {
+            Ok(code) => code,
+            Err(_) => {
+                let error = DxfError::Parse(format!(
+                    "Invalid DXF code at line {}: '{}'",
+                    self.line_number, code_str
+                ));
+                // This fork (F17): consume the value line as well, so a
+                // failsafe caller resumes at the next code/value pair.
+                let _ = self.read_line()?;
+                return Err(error);
+            }
+        };
 
         // Read value line
         let value_line = match self.read_line()? {
