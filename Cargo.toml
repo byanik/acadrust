@@ -431,6 +431,10 @@ path = "tests/hardening_h2_ac18.rs"
 name = "hardening_h3_sections"
 path = "tests/hardening_h3_sections.rs"
 
+[[test]]
+name = "hardening_h5_overread"
+path = "tests/hardening_h5_overread.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 

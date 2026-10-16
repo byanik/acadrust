@@ -232,14 +232,9 @@ fn decode_ac21_page(
             limit: AC21_MAX_PAGE_BUFFER as u64,
         });
     }
-    let mut padded_source = zeroed_vec(
-        compressed_data.len() + 64,
-        AC21_MAX_PAGE_BUFFER + 64,
-        budget,
-        "AC21 page",
-    )?;
-    padded_source[..compressed_data.len()].copy_from_slice(&compressed_data);
-    // `+ 64` is slack for literal runs that end past the declared size.
+    // `+ 64` is slack for literal runs that end past the declared size. The
+    // compressed source gets no such slack: the decoder reads only the declared
+    // `compressed_size` bytes and a read past them is an error (patch H5).
     let output_len = (uncompressed_size as usize)
         .checked_add(64)
         .ok_or(DxfError::LimitExceeded {
@@ -250,7 +245,7 @@ fn decode_ac21_page(
     let mut decompressed_data =
         zeroed_vec(output_len, AC21_MAX_PAGE_BUFFER + 64, budget, "AC21 decompressed page")?;
     decompress_ac21(
-        &padded_source,
+        &compressed_data,
         0,
         compressed_size as u32,
         &mut decompressed_data,
@@ -961,6 +956,9 @@ pub struct DwgReader<R: Read + Seek> {
     /// callers can map DWG parsing into a larger file-open pipeline without
     /// coupling this crate to a UI or an async runtime.
     progress: Option<std::sync::Arc<dyn Fn(u16) + Send + Sync>>,
+    /// Pages replaced by zeros in failsafe mode (this fork, patch H5);
+    /// moved into `ReadStats::diagnostics` by the read.
+    page_diagnostics: Vec<ReadDiagnostic>,
 }
 
 impl DwgReader<File> {
@@ -982,6 +980,7 @@ impl DwgReader<File> {
             notifications: NotificationCollection::new(),
             source_path: Some(path.to_string_lossy().into_owned()),
             progress: None,
+            page_diagnostics: Vec::new(),
         })
     }
 }
@@ -1002,6 +1001,7 @@ impl DwgReader<Cursor<memmap2::Mmap>> {
             notifications: NotificationCollection::new(),
             source_path: Some(path.to_string_lossy().into_owned()),
             progress: None,
+            page_diagnostics: Vec::new(),
         })
     }
 }
@@ -1015,6 +1015,7 @@ impl<R: Read + Seek> DwgReader<R> {
             notifications: NotificationCollection::new(),
             source_path: None,
             progress: None,
+            page_diagnostics: Vec::new(),
         }
     }
 
@@ -1026,7 +1027,47 @@ impl<R: Read + Seek> DwgReader<R> {
             notifications: NotificationCollection::new(),
             source_path: None,
             progress: None,
+            page_diagnostics: Vec::new(),
         }
+    }
+
+    /// Record a page that failsafe mode replaced (wholly or partly) with zeros
+    /// (this fork, patch H5).
+    fn note_zero_filled_page(&mut self, section: Option<&str>, message: String) {
+        self.notifications
+            .notify(NotificationType::Error, message.clone());
+        let mut diagnostic = ReadDiagnostic::new("page-zero-filled", ReadStage::Section, message);
+        diagnostic.section = section.map(str::to_owned);
+        push_read_diagnostic(&mut self.page_diagnostics, diagnostic);
+    }
+
+    /// Put the page events in front of `diagnostics`. A zero-filled page makes
+    /// the records on it fail, so the later diagnostics can fill the bounded
+    /// list; the page events come first and are never the ones it drops.
+    fn merge_page_diagnostics(&mut self, diagnostics: &mut Vec<ReadDiagnostic>) {
+        if self.page_diagnostics.is_empty() {
+            return;
+        }
+        let mut merged = std::mem::take(&mut self.page_diagnostics);
+        for diagnostic in std::mem::take(diagnostics) {
+            push_read_diagnostic(&mut merged, diagnostic);
+        }
+        *diagnostics = merged;
+    }
+
+    /// Fill `buf` from the stream; returns the number of bytes read before
+    /// end of file.
+    fn read_up_to(&mut self, buf: &mut [u8]) -> Result<usize, DxfError> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match self.stream.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(filled)
     }
 
     /// Length of the underlying stream: the base of every section cap
@@ -1121,6 +1162,8 @@ impl<R: Read + Seek> DwgReader<R> {
         let perf = std::env::var_os("PERF").is_some();
         let total_started = web_time::Instant::now();
         let mut diagnostics = Vec::new();
+        // Page events of an earlier standalone section read are not this read's.
+        self.page_diagnostics.clear();
         self.report_progress(0);
 
         // AC1009/R12 predates the section-map/object-stream model used by the
@@ -1186,6 +1229,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 let mut doc = crate::document::CadDocument::default();
                 doc.notifications
                     .extend(std::mem::take(&mut self.notifications));
+                self.merge_page_diagnostics(&mut diagnostics);
                 let stats = crate::io::read::ReadStats::from_document(
                     &doc,
                     SourceFormat::Dwg,
@@ -1625,6 +1669,7 @@ impl<R: Read + Seek> DwgReader<R> {
             );
         }
         self.report_progress(1000);
+        self.merge_page_diagnostics(&mut diagnostics);
         let source_sections =
             usize::from(handles_section_read).saturating_add(usize::from(objects_section_read));
         let stats = crate::io::read::ReadStats::from_document(
@@ -2449,10 +2494,19 @@ impl<R: Read + Seek> DwgReader<R> {
             self.options.budget.as_ref(),
             "AC21 encoded page",
         )?;
-        let bytes_read = self.stream.read(&mut encoded_buffer)?;
+        let bytes_read = self.read_up_to(&mut encoded_buffer)?;
         if bytes_read < read_length {
-            // Pad remaining with zeros
-            encoded_buffer[bytes_read..].fill(0);
+            let message = format!(
+                "AC21 system page at {:#X} ends after {} of {} bytes",
+                AC21_FILE_HEADER_SIZE + page_offset,
+                bytes_read,
+                read_length
+            );
+            if !self.options.failsafe {
+                return Err(DxfError::InvalidFormat(message));
+            }
+            // Failsafe keeps upstream's zero padding, but counts it.
+            self.note_zero_filled_page(None, message);
         }
 
         decode_ac21_page(
@@ -2631,7 +2685,7 @@ impl<R: Read + Seek> DwgReader<R> {
                     Some(&(page_offset, _)) => {
                         match ac21_page_layout(page.compressed_size, 1, block_size) {
                             Ok((total_size, factor, read_length)) => {
-                                let read = (|| -> Result<Vec<u8>, DxfError> {
+                                let read = (|| -> Result<(Vec<u8>, usize), DxfError> {
                                     self.stream.seek(SeekFrom::Start(
                                         AC21_FILE_HEADER_SIZE + page_offset as u64,
                                     ))?;
@@ -2641,10 +2695,25 @@ impl<R: Read + Seek> DwgReader<R> {
                                         budget.as_ref(),
                                         "AC21 encoded page",
                                     )?;
-                                    let read = self.stream.read(&mut bytes)?;
-                                    bytes[read..].fill(0);
-                                    Ok(bytes)
+                                    let read = self.read_up_to(&mut bytes)?;
+                                    Ok((bytes, read))
                                 })();
+                                let read = match read {
+                                    Ok((bytes, read)) if read < read_length => {
+                                        let message = format!(
+                                            "page {} in section '{}' ends after {} of {} bytes",
+                                            page.page_number, section_name, read, read_length
+                                        );
+                                        if !failsafe {
+                                            return Err(DxfError::InvalidFormat(message));
+                                        }
+                                        // Failsafe keeps upstream's zero padding, but counts it.
+                                        self.note_zero_filled_page(Some(section_name), message);
+                                        Ok(bytes)
+                                    }
+                                    Ok((bytes, _)) => Ok(bytes),
+                                    Err(error) => Err(error),
+                                };
                                 match read {
                                     Ok(bytes) => PagePayload::Encoded {
                                         bytes,
@@ -2723,8 +2792,8 @@ impl<R: Read + Seek> DwgReader<R> {
                     }
                     Err(error) => {
                         skipped_pages += 1;
-                        self.notifications.notify(
-                            NotificationType::Error,
+                        self.note_zero_filled_page(
+                            Some(section_name),
                             format!(
                                 "Failsafe: skipped corrupt page {} in section '{}': {}",
                                 page_number, section_name, error
@@ -2828,13 +2897,15 @@ impl<R: Read + Seek> DwgReader<R> {
 
                 // Read compressed data
                 if data_compressed_size <= 0 || data_compressed_size > 10_000_000 {
-                    self.notifications.notify(
-                        NotificationType::Warning,
-                        format!(
-                            "AC18: Invalid compressed size {} for page {} in section '{}'",
-                            data_compressed_size, page_number, section_name
-                        ),
+                    let message = format!(
+                        "AC18: Invalid compressed size {} for page {} in section '{}'",
+                        data_compressed_size, page_number, section_name
                     );
+                    if !failsafe {
+                        return Err(DxfError::InvalidFormat(message));
+                    }
+                    // The page stays zero in the pre-zeroed section buffer.
+                    self.note_zero_filled_page(Some(section_name), message);
                     continue;
                 }
                 let mut compressed = zeroed_vec(
@@ -2861,8 +2932,9 @@ impl<R: Read + Seek> DwgReader<R> {
                 let decompressed = match decompressed {
                     Ok(decompressed) => decompressed,
                     Err(error) if failsafe && !error.is_resource_stop() => {
-                        self.notifications.notify(
-                            NotificationType::Error,
+                        // The page stays zero in the pre-zeroed section buffer.
+                        self.note_zero_filled_page(
+                            Some(section_name),
                             format!(
                                 "Failsafe: skipped corrupt page {} in section '{}': {}",
                                 page_number, section_name, error
@@ -3497,24 +3569,26 @@ mod hardening_tests {
     }
 
     #[test]
-    fn ac21_page_scratch_copy_is_budgeted() {
+    fn ac21_page_buffers_are_budgeted_and_the_source_is_not_copied() {
         let encoded = [0u8; 255];
         let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let record = std::sync::Arc::clone(&asked);
-        // Refuse the 64-byte-padded copy of the 251-byte page.
+        // Refuse the 64-byte-padded output of the 16-byte page. The 251-byte
+        // source is decoded in place: no 64-byte-padded copy of it is asked
+        // for any more (patch H5).
         let budget = AllocBudget::new(move |bytes| {
             record.lock().unwrap().push(bytes);
-            bytes != 251 + 64
+            bytes != 16 + 64
         });
         let result = decode_ac21_page(&encoded, 251, 1, 251, 8, 16, Some(&budget));
         assert!(
             matches!(
                 result,
-                Err(DxfError::BudgetExceeded { what: "AC21 page", requested: 315 })
+                Err(DxfError::BudgetExceeded { what: "AC21 decompressed page", requested: 80 })
             ),
             "{result:?}"
         );
-        assert_eq!(*asked.lock().unwrap(), vec![251, 315]);
+        assert_eq!(*asked.lock().unwrap(), vec![251, 80]);
     }
 
     #[test]

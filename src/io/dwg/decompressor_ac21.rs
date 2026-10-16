@@ -121,10 +121,16 @@ fn decompress_ac21_inner(
     let end_index = start
         .checked_add(length as usize)
         .ok_or_else(|| corrupt("compressed length overflows"))?;
+    if length == 0 {
+        // Nothing is declared, so nothing is read (not even the opcode).
+        return Ok(());
+    }
+    // Reading past the declared compressed length is an error, never a read
+    // of whatever bytes follow the stream (this fork, patch H5).
     let mut input = Input {
         data: source,
         pos: start,
-        limit: source.len(),
+        limit: end_index.min(source.len()),
     };
     let mut output = Output {
         data: buffer,
