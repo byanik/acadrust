@@ -37,7 +37,9 @@
 pub mod annotative_eed;
 pub(crate) mod typeface_eed;
 pub mod checksum;
+#[cfg(feature = "writers")]
 pub mod compression;
+#[cfg(feature = "writers")]
 pub mod compressor_ac21;
 pub mod crc;
 pub mod decompressor_ac18;
@@ -47,8 +49,10 @@ pub mod dwg_document_builder;
 pub mod dwg_reader;
 pub mod dwg_reference_type;
 pub mod dwg_stream_readers;
+#[cfg(feature = "writers")]
 pub mod dwg_stream_writers;
 pub mod dwg_version;
+#[cfg(feature = "writers")]
 pub mod dwg_writer;
 pub mod eed_codec;
 pub(crate) mod embedded_entity;
@@ -63,6 +67,7 @@ pub use dwg_reader::DwgReadOptions;
 pub use dwg_reader::DwgReader;
 pub use dwg_reference_type::DwgReferenceType;
 pub use dwg_version::DwgVersion;
+#[cfg(feature = "writers")]
 pub use dwg_writer::DwgWriter;
 
 pub(crate) fn sab_fingerprint<'a>(
@@ -79,4 +84,5 @@ pub(crate) fn sab_fingerprint<'a>(
     fingerprint.sort_unstable_by_key(|entry| entry.0);
     fingerprint
 }
+#[cfg(feature = "writers")]
 pub use file_headers::{DwgFileHeaderWriterAC15, DwgFileHeaderWriterAC18};

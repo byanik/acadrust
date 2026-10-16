@@ -2,7 +2,9 @@
 //! application-level reference roles separately from the native curve bodies.
 
 use super::dwg::dwg_version::DwgVersion;
-use super::dwg::embedded_entity::{decode_embedded_entity, encode_embedded_entity};
+use super::dwg::embedded_entity::decode_embedded_entity;
+#[cfg(feature = "writers")]
+use super::dwg::embedded_entity::encode_embedded_entity;
 use super::loft_parameters::{has_record, remove_record, writable_dictionary};
 use crate::entities::{EmbeddedEntity, SurfaceData};
 use crate::objects::{ObjectType, XRecord, XRecordEntry, XRecordValue};
@@ -12,6 +14,7 @@ use crate::{CadDocument, EntityType};
 const KEY: &str = "CADCODEC_LOFT_CURVES_V1";
 const REFERENCE_KEY: &str = "CADCODEC_LOFT_REFERENCES_V1";
 
+#[cfg(feature = "writers")]
 pub(crate) fn has_inputs(document: &CadDocument) -> bool {
     document.entities().any(|entity| matches!(entity, EntityType::Surface(surface)
         if matches!(&surface.surface_data, SurfaceData::Lofted {
@@ -22,6 +25,7 @@ pub(crate) fn has_inputs(document: &CadDocument) -> bool {
             || has_record(document, surface.common.xdictionary_handle, REFERENCE_KEY))))
 }
 
+#[cfg(feature = "writers")]
 pub(crate) fn store(document: &mut CadDocument) {
     store_references(document);
     let inputs = document
@@ -179,6 +183,7 @@ fn embedded_from_handle(document: &CadDocument, handle: crate::Handle) -> Option
     })
 }
 
+#[cfg(feature = "writers")]
 fn store_references(document: &mut CadDocument) {
     let surfaces: Vec<_> = document
         .entities()

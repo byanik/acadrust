@@ -114,7 +114,7 @@ impl Hatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
     use crate::entities::hatch::{HatchPattern, HatchPatternLine};

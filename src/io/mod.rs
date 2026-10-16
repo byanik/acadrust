@@ -19,8 +19,12 @@ mod surface_history;
 #[cfg(feature = "import")]
 pub mod import;
 
-pub use dwg::{DwgReader, DwgWriter};
-pub use dxf::{DxfReader, DxfWriter};
+pub use dwg::DwgReader;
+#[cfg(feature = "writers")]
+pub use dwg::DwgWriter;
+pub use dxf::DxfReader;
+#[cfg(feature = "writers")]
+pub use dxf::DxfWriter;
 pub use read::{
     push_read_diagnostic, ReadDiagnostic, ReadOutcome, ReadStage, ReadStats, SourceFormat,
     MAX_READ_DIAGNOSTICS,

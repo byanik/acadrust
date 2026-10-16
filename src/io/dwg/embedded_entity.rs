@@ -7,6 +7,7 @@ use crate::entities::{
 use crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader;
 use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_stream_readers::object_reader::{common, entities};
+#[cfg(feature = "writers")]
 use crate::io::dwg::dwg_stream_writers::{DwgBitWriter, DwgMergedWriter};
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::types::{DxfVersion, Matrix3, Vector2, Vector3};
@@ -19,11 +20,13 @@ fn center_to_entity(center: Vector3, normal: Vector3) -> Vector3 {
     Matrix3::arbitrary_axis(normal).transpose() * center
 }
 
+#[cfg(feature = "writers")]
 fn center_to_world(center: Vector3, normal: Vector3) -> Vector3 {
     Matrix3::arbitrary_axis(normal) * center
 }
 
 /// Encoded embedded entity body, including exact meaningful bit length.
+#[cfg(feature = "writers")]
 pub(crate) struct EncodedEmbeddedEntity {
     pub type_code: i32,
     pub bit_length: usize,
@@ -37,6 +40,7 @@ pub(crate) fn is_body_profile(type_code: i32) -> bool {
 /// Compare meaningful body bits without interpreting unused final-byte bits.
 /// Byte-sized records may include up to seven zero padding bits, but an
 /// otherwise different native layout must retain its original opaque body.
+#[cfg(feature = "writers")]
 fn preserves_embedded_body(
     encoded: &EncodedEmbeddedEntity,
     type_code: i32,
@@ -64,6 +68,35 @@ fn preserves_embedded_body(
         }
     }
     (encoded.bit_length..bit_length).all(|bit| bytes[bit / 8] & (1 << (7 - bit % 8)) == 0)
+}
+
+/// A typed embedded REGION is kept only when re-encoding it reproduces the
+/// stored body bit for bit.
+#[cfg(feature = "writers")]
+fn region_body_round_trips(
+    entity: &EmbeddedEntity,
+    type_code: i32,
+    bit_length: usize,
+    bytes: &[u8],
+    version: DwgVersion,
+    dxf_version: DxfVersion,
+) -> bool {
+    let encoded = encode_embedded_entity(entity, version, dxf_version);
+    preserves_embedded_body(&encoded, type_code, bit_length, bytes)
+}
+
+/// This fork (F16): without the `writers` feature the body cannot be
+/// re-encoded for the comparison, so an embedded REGION stays opaque.
+#[cfg(not(feature = "writers"))]
+fn region_body_round_trips(
+    _entity: &EmbeddedEntity,
+    _type_code: i32,
+    _bit_length: usize,
+    _bytes: &[u8],
+    _version: DwgVersion,
+    _dxf_version: DxfVersion,
+) -> bool {
+    false
 }
 
 /// Read an embedded entity whose size prefix is a meaningful bit count.
@@ -143,8 +176,14 @@ pub(crate) fn decode_embedded_entity(
             entity.acis_data.extra_acis_data = data.extra_acis_data.map(Box::new);
             entity.acis_data.wireframe_isolines = data.isolines;
             let entity = EmbeddedEntity::Region(entity);
-            let encoded = encode_embedded_entity(&entity, version, dxf_version);
-            if preserves_embedded_body(&encoded, type_code, bit_length, &preserved_bytes) {
+            if region_body_round_trips(
+                &entity,
+                type_code,
+                bit_length,
+                &preserved_bytes,
+                version,
+                dxf_version,
+            ) {
                 Some(entity)
             } else {
                 Some(preserve_unknown())
@@ -280,7 +319,85 @@ mod malformed_tests {
     }
 }
 
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    /// The body an empty REGION encodes to in AC1024 (meaningful bit count, bytes), captured
+    /// with the writers enabled. The reader accepts it as a typed REGION, so it can only stay
+    /// opaque when the body cannot be re-encoded for the comparison.
+    const EMPTY_REGION_BITS: usize = 5;
+    const EMPTY_REGION_BYTES: [u8; 1] = [0xB0];
+
+    #[cfg(not(feature = "writers"))]
+    #[test]
+    fn region_bodies_stay_opaque_without_the_writers() {
+        let region = EmbeddedEntity::Region(Region::new());
+        assert!(!region_body_round_trips(
+            &region,
+            common::OBJ_REGION as i32,
+            8,
+            &[0],
+            DwgVersion::AC24,
+            DxfVersion::AC1024,
+        ));
+        let decoded = decode_embedded_entity(
+            common::OBJ_REGION as i32,
+            8,
+            vec![0],
+            DwgVersion::AC24,
+            DxfVersion::AC1024,
+        );
+        assert!(matches!(decoded, Some(EmbeddedEntity::Unknown { .. })));
+        // A body that decodes to a typed REGION still comes back raw, byte for byte.
+        let decoded = decode_embedded_entity(
+            common::OBJ_REGION as i32,
+            EMPTY_REGION_BITS,
+            EMPTY_REGION_BYTES.to_vec(),
+            DwgVersion::AC24,
+            DxfVersion::AC1024,
+        );
+        match decoded {
+            Some(EmbeddedEntity::Unknown { type_code, bit_count, bytes }) => {
+                assert_eq!(type_code, common::OBJ_REGION as i32);
+                assert_eq!(bit_count, EMPTY_REGION_BITS);
+                assert_eq!(bytes, EMPTY_REGION_BYTES);
+            }
+            other => panic!("expected an opaque REGION body, got {other:?}"),
+        }
+    }
+
+    /// The other half of the pair above: with the writers the same body re-encodes bit for bit
+    /// and is kept as a typed REGION, which also proves the captured constants are current.
+    #[cfg(feature = "writers")]
+    #[test]
+    fn region_bodies_are_typed_with_the_writers() {
+        let decoded = decode_embedded_entity(
+            common::OBJ_REGION as i32,
+            EMPTY_REGION_BITS,
+            EMPTY_REGION_BYTES.to_vec(),
+            DwgVersion::AC24,
+            DxfVersion::AC1024,
+        );
+        let Some(region @ EmbeddedEntity::Region(_)) = decoded else {
+            panic!("expected a typed REGION, got {decoded:?}");
+        };
+        assert!(region_body_round_trips(
+            &region,
+            common::OBJ_REGION as i32,
+            EMPTY_REGION_BITS,
+            &EMPTY_REGION_BYTES,
+            DwgVersion::AC24,
+            DxfVersion::AC1024,
+        ));
+        let encoded = encode_embedded_entity(&region, DwgVersion::AC24, DxfVersion::AC1024);
+        assert_eq!(encoded.bit_length, EMPTY_REGION_BITS);
+        assert_eq!(encoded.bytes, EMPTY_REGION_BYTES);
+    }
+}
+
 /// Encode one typed embedded entity to its type-specific DWG body.
+#[cfg(feature = "writers")]
 pub(crate) fn encode_embedded_entity(
     entity: &EmbeddedEntity,
     version: DwgVersion,
@@ -382,6 +499,7 @@ pub(crate) fn encode_embedded_entity(
     }
 }
 
+#[cfg(feature = "writers")]
 pub(crate) fn write_embedded_bits_with_length(
     writer: &mut DwgMergedWriter,
     encoded: &EncodedEmbeddedEntity,
@@ -393,6 +511,7 @@ pub(crate) fn write_embedded_bits_with_length(
     }
 }
 
+#[cfg(feature = "writers")]
 fn write_lwpolyline(writer: &mut DwgBitWriter, entity: &LwPolyline, version: DwgVersion) {
     let has_widths = entity
         .vertices
@@ -475,6 +594,7 @@ fn write_lwpolyline(writer: &mut DwgBitWriter, entity: &LwPolyline, version: Dwg
     }
 }
 
+#[cfg(feature = "writers")]
 fn write_spline(
     writer: &mut DwgBitWriter,
     entity: &Spline,

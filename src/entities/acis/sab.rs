@@ -1755,7 +1755,7 @@ fn read_tagged_double(data: &[u8], pos: &mut usize) -> Result<f64, SabError> {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
 

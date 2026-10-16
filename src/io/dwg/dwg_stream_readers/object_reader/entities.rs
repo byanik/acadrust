@@ -5879,7 +5879,7 @@ fn read_wire(reader: &mut DwgMergedReader) -> Wire {
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_stream_writers::merged_writer::DwgMergedWriter;

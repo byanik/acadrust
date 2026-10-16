@@ -2,7 +2,9 @@
 //! solid-history loft stream. Native section and guide records stay intact.
 
 use super::dwg::dwg_version::DwgVersion;
-use super::dwg::embedded_entity::{decode_embedded_entity, encode_embedded_entity};
+use super::dwg::embedded_entity::decode_embedded_entity;
+#[cfg(feature = "writers")]
+use super::dwg::embedded_entity::encode_embedded_entity;
 use crate::objects::{
     Dictionary, DynamicBlockData, ObjectType, SolidHistoryLoftParameters, SolidHistoryOperation,
     XRecord, XRecordEntry, XRecordValue,
@@ -301,6 +303,7 @@ pub(super) fn remove_record(document: &mut CadDocument, dictionary: &mut Diction
 
 /// Work only on an output copy. Saving must not add history/undo edits to the
 /// live document, and copied history nodes must not share mutable settings.
+#[cfg(feature = "writers")]
 pub(crate) fn prepared(document: &CadDocument) -> Cow<'_, CadDocument> {
     let settings = document
         .objects
@@ -416,6 +419,7 @@ pub(crate) fn restore(document: &mut CadDocument) {
     }
 }
 
+#[cfg(feature = "writers")]
 fn encode(value: &SolidHistoryLoftParameters) -> XRecord {
     let mut record = XRecord::named(KEY);
     record.add_int32(90, 1);

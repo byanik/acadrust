@@ -871,7 +871,7 @@ fn read_header_fields(r: &mut SectionReader, v: DxfVersion, h: &mut HeaderVariab
 //  Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_stream_writers::header_writer;

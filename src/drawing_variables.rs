@@ -102,7 +102,7 @@ impl CadDocument {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
     use crate::{DwgReader, DwgWriter, DxfReader, DxfWriter};

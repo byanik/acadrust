@@ -41,6 +41,7 @@ repository = "https://github.com/hakanaktt/acadrust"
 [features]
 default = []
 import = ["dep:quick-xml"]
+writers = []
 serde = [
     "dep:serde",
     "bitflags/serde",
@@ -54,22 +55,27 @@ path = "src/lib.rs"
 [[example]]
 name = "entity_atlas"
 path = "examples/entity_atlas.rs"
+required-features = ["writers"]
 
 [[example]]
 name = "gen_all_entities_all_versions"
 path = "examples/gen_all_entities_all_versions.rs"
+required-features = ["writers"]
 
 [[example]]
 name = "issue_regressions_bricscad"
 path = "examples/issue_regressions_bricscad.rs"
+required-features = ["writers"]
 
 [[example]]
 name = "roundtrip_analysis"
 path = "examples/roundtrip_analysis.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "annotative_context_encoder"
 path = "tests/annotative_context_encoder.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "anonymous_block_names"
@@ -78,78 +84,97 @@ path = "tests/anonymous_block_names.rs"
 [[test]]
 name = "associative_constraint_group"
 path = "tests/associative_constraint_group.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "associative_empty_value"
 path = "tests/associative_empty_value.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "block_base_point"
 path = "tests/block_base_point.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "block_definition_roundtrip"
 path = "tests/block_definition_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "current_style_header"
 path = "tests/current_style_header.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "datatable_roundtrip"
 path = "tests/datatable_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "deterministic_output"
 path = "tests/deterministic_output.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dimension_dxf_roundtrip"
 path = "tests/dimension_dxf_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dimjogang"
 path = "tests/dimjogang.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dimstyle_dxf_defaults"
 path = "tests/dimstyle_dxf_defaults.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dwg_object_capacity"
 path = "tests/dwg_object_capacity.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dwg_review_regressions"
 path = "tests/dwg_review_regressions.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dxf_autocad_conformance"
 path = "tests/dxf_autocad_conformance.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dxf_reader_regressions"
 path = "tests/dxf_reader_regressions.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dxf_style_roundtrip"
 path = "tests/dxf_style_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "dynamic_action_codecs"
 path = "tests/dynamic_action_codecs.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "entity_audit_regressions"
 path = "tests/entity_audit_regressions.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "field_count_regressions"
 path = "tests/field_count_regressions.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "helix_roundtrip"
 path = "tests/helix_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "import_collada"
@@ -162,22 +187,27 @@ path = "tests/import_stl.rs"
 [[test]]
 name = "issue104"
 path = "tests/issue104.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue105"
 path = "tests/issue105.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue109"
 path = "tests/issue109.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue114"
 path = "tests/issue114.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue115"
 path = "tests/issue115.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue119"
@@ -186,110 +216,137 @@ path = "tests/issue119.rs"
 [[test]]
 name = "issue120"
 path = "tests/issue120.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue121"
 path = "tests/issue121.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue123"
 path = "tests/issue123.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue124"
 path = "tests/issue124.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue125"
 path = "tests/issue125.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue126"
 path = "tests/issue126.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue127"
 path = "tests/issue127.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue128"
 path = "tests/issue128.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue129"
 path = "tests/issue129.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue130"
 path = "tests/issue130.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue131"
 path = "tests/issue131.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue132"
 path = "tests/issue132.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue132_colors"
 path = "tests/issue132_colors.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue41"
 path = "tests/issue41.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue42"
 path = "tests/issue42.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue45"
 path = "tests/issue45.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue51"
 path = "tests/issue51.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue52"
 path = "tests/issue52.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue55"
 path = "tests/issue55.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue63"
 path = "tests/issue63.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue64"
 path = "tests/issue64.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue66"
 path = "tests/issue66.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue67"
 path = "tests/issue67.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue68"
 path = "tests/issue68.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "issue80"
 path = "tests/issue80.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "layer_color_book_roundtrip"
 path = "tests/layer_color_book_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "layer_description"
 path = "tests/layer_description.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "layer_rename"
@@ -298,10 +355,12 @@ path = "tests/layer_rename.rs"
 [[test]]
 name = "layer_table_records"
 path = "tests/layer_table_records.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "legacy_class_identity"
 path = "tests/legacy_class_identity.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "material_xrecord"
@@ -310,34 +369,42 @@ path = "tests/material_xrecord.rs"
 [[test]]
 name = "mpolygon"
 path = "tests/mpolygon.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "mtext_annotative"
 path = "tests/mtext_annotative.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "multiline_attribute_style"
 path = "tests/multiline_attribute_style.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "r12_dwg_roundtrip"
 path = "tests/r12_dwg_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "raw_all_acds"
 path = "tests/raw_all_acds.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "raw_all_compound"
 path = "tests/raw_all_compound.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "raw_all_exclusions"
 path = "tests/raw_all_exclusions.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "read_visiting"
 path = "tests/read_visiting.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "resolve_references_xdictionary"
@@ -346,10 +413,12 @@ path = "tests/resolve_references_xdictionary.rs"
 [[test]]
 name = "roundtrip"
 path = "tests/roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "section_manager_roundtrip"
 path = "tests/section_manager_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "semantic_inventory"
@@ -358,86 +427,107 @@ path = "tests/semantic_inventory.rs"
 [[test]]
 name = "shape_angles"
 path = "tests/shape_angles.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "solid_history"
 path = "tests/solid_history.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "spline_knot_degree"
 path = "tests/spline_knot_degree.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "summary_info_roundtrip"
 path = "tests/summary_info_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "table_cell_conversion"
 path = "tests/table_cell_conversion.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "table_dwg_read"
 path = "tests/table_dwg_read.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "table_dwg_roundtrip"
 path = "tests/table_dwg_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "table_dxf_roundtrip"
 path = "tests/table_dxf_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "transparency_roundtrip"
 path = "tests/transparency_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "true_color_unsigned_accmcolor"
 path = "tests/true_color_unsigned_accmcolor.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "underlay_roundtrip"
 path = "tests/underlay_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "viewport_angles"
 path = "tests/viewport_angles.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "viewport_clipping"
 path = "tests/viewport_clipping.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "xref_block_roundtrip"
 path = "tests/xref_block_roundtrip.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "xref_linetype_localization"
 path = "tests/xref_linetype_localization.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_limits"
 path = "tests/hardening_limits.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_h1_ac21"
 path = "tests/hardening_h1_ac21.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_h2_ac18"
 path = "tests/hardening_h2_ac18.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_h3_sections"
 path = "tests/hardening_h3_sections.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_h5_overread"
 path = "tests/hardening_h5_overread.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_c1_cancel"
 path = "tests/hardening_c1_cancel.rs"
+required-features = ["writers"]
 
 [[test]]
 name = "hardening_h4_dxf"
@@ -450,6 +540,10 @@ path = "tests/hardening_f17_dxf.rs"
 [[test]]
 name = "hardening_surface"
 path = "tests/hardening_surface.rs"
+
+[[test]]
+name = "hardening_f16_readonly"
+path = "tests/hardening_f16_readonly.rs"
 
 [dependencies.anyhow]
 version = "1.0"

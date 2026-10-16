@@ -23,12 +23,15 @@ pub mod code_page;
 mod dxf_code;
 mod group_code_value;
 mod reader;
+#[cfg(feature = "writers")]
 mod writer;
 
 pub use dxf_code::DxfCode;
 pub use group_code_value::GroupCodeValueType;
 pub use reader::{DxfReader, DxfReaderConfiguration};
+#[cfg(feature = "writers")]
 pub use writer::{value_type_for_code, write_binary_dxf, write_dxf};
+#[cfg(feature = "writers")]
 pub use writer::{
     DxfBinaryWriter, DxfStreamWriter, DxfStreamWriterExt, DxfTextWriter, DxfWriter, SectionWriter,
 };

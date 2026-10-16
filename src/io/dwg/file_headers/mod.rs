@@ -8,14 +8,20 @@
 //! Also provides section definition constants, descriptor structs,
 //! and locator record structs used by all formats.
 
+#[cfg(feature = "writers")]
 pub mod file_header_ac15;
+#[cfg(feature = "writers")]
 pub mod file_header_ac18;
+#[cfg(feature = "writers")]
 pub mod file_header_ac21;
 pub mod section_definition;
 pub mod section_descriptor;
 
+#[cfg(feature = "writers")]
 pub use file_header_ac15::DwgFileHeaderWriterAC15;
+#[cfg(feature = "writers")]
 pub use file_header_ac18::DwgFileHeaderWriterAC18;
+#[cfg(feature = "writers")]
 pub use file_header_ac21::DwgFileHeaderWriterAC21;
 pub use section_definition::names as section_names;
 pub use section_descriptor::{DwgLocalSectionMap, DwgSectionDescriptor, DwgSectionLocatorRecord};

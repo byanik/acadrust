@@ -1880,7 +1880,7 @@ pub fn read_spatial_filter(reader: &mut DwgMergedReader) -> SpatialFilterData {
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
+#[cfg(all(test, feature = "writers"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_reference_type::DwgReferenceType;

@@ -8,7 +8,9 @@ use std::io::Cursor;
 
 use crate::document::CadDocument;
 use crate::error::{DxfError, Result};
-use crate::io::dxf::{DxfReader, DxfWriter};
+use crate::io::dxf::DxfReader;
+#[cfg(feature = "writers")]
+use crate::io::dxf::DxfWriter;
 use crate::tables::TableEntry;
 use crate::types::DxfVersion;
 
@@ -334,6 +336,7 @@ fn document_table_records(document: &CadDocument) -> [Vec<EntityRecord>; 10] {
     records
 }
 
+#[cfg(feature = "writers")]
 pub(crate) fn write_document(document: &CadDocument) -> Result<Vec<u8>> {
     let dxf = DxfWriter::new(document).write_to_vec()?;
     let (entity_records, block_records) = parse_dxf_records(&dxf, &document.header.code_page);
