@@ -51,3 +51,19 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | H6 | acadrust(H6): AllocBudget, bounded allocation helpers, DxfError limits | src/io/limits.rs; src/io/mod.rs; src/error.rs; src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_common/mod.rs; tests/hardening_limits.rs | This fork (original work) | tests/hardening_limits.rs; src/io/limits.rs::hardening_tests |
 | H1 | acadrust(H1): bounds-checked AC21 LZ77; checked compr_len | src/io/dwg/decompressor_ac21.rs; src/io/dwg/compressor_ac21.rs; src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_h1_ac21.rs | This fork (original work); algorithm unchanged from upstream | tests/hardening_h1_ac21.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
 | H2 | acadrust(H2): validate AC18 decompressed size before allocating | src/io/dwg/decompressor_ac18.rs; src/io/dwg/dwg_reader.rs; src/io/limits.rs; Cargo.toml; tests/hardening_h2_ac18.rs | This fork (original work) | tests/hardening_h2_ac18.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
+| H3 | acadrust(H3): cap section and page sizes; try_reserve under budget | src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_h3_sections.rs; tests/hardening_h2_ac18.rs | This fork (original work) | tests/hardening_h3_sections.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
+
+## Limits (H2, H3)
+
+| Limit | Value | Why |
+|---|---|---|
+| AC18 decompressed page | 16 MiB (`AC18_MAX_PAGE_DECOMPRESSED`) | Real pages are 0x7400 bytes; 16 MiB leaves a 500× margin. |
+| AC21 page buffer | 100,000,000 bytes (`AC21_MAX_PAGE_BUFFER`) | Upstream's own `ac21_page_layout` limit, now also applied to the decompressed size. |
+| Decompressed section | min(max(file length × 64, 64 MiB), pages × 100 MB) | Measured expansion on real drawings is 2.6× (median) to 5.1× (max); 64× keeps a 12× margin, the 64 MiB floor protects small files. |
+| AC15 raw section | file length | R13–R2000 sections are stored uncompressed, so a larger size cannot be real. |
+| Preview container | file length | The container lies inside the file; a larger claimed size leaves the preview absent instead of allocating it. |
+| Any reservation above | caller's `AllocBudget` | Spec 2.5: sizes read from the file are bounded by format constants and by the byte budget. |
+
+A refused budget (`BudgetExceeded`) is not file corruption: it is returned by `read*` in failsafe mode too, never turned into a diagnostic. A size above a format limit (`LimitExceeded`) is corruption: that section read fails and the document read records an `*-extract-failed` diagnostic and carries on, like any other unreadable section (a file-header failure is an error in strict mode).
+
+Acceptance: no synthetic, public or corpus file is rejected by these caps (T10 corpus gate).

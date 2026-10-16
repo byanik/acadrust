@@ -41,6 +41,9 @@ use crate::io::dwg::dwg21_metadata::Dwg21CompressedMetadata;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::parallel::{map_ordered, worker_count};
 use crate::io::dwg::reed_solomon::reed_solomon_decode;
+use crate::io::limits::{
+    reserve_vec, section_cap, zeroed_vec, AllocBudget, AC21_MAX_PAGE_BUFFER,
+};
 use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage, SourceFormat};
 use crate::notification::{NotificationCollection, NotificationType};
 
@@ -139,7 +142,7 @@ fn read_system_page_ac18<S: Read>(
             what, comp_size
         )));
     }
-    let mut compressed = vec![0u8; comp_size as usize];
+    let mut compressed = zeroed_vec(comp_size as usize, 10_000_000, budget, "AC18 system page")?;
     stream.read_exact(&mut compressed)?;
     if compression != 2 {
         return Ok(compressed);
@@ -172,6 +175,40 @@ fn ac21_page_layout(
     Ok((total_size, factor, factor * 255))
 }
 
+/// Validate a section's total size read from the file before it is allocated
+/// (this fork, patch H3). The cap is the smaller of
+/// `max(file_len * 64, 64 MiB)` and `pages * 100 MB` (every page holds at most
+/// one page buffer); the budget is asked last.
+pub(crate) fn checked_section_alloc(
+    total: u64,
+    file_len: u64,
+    pages: usize,
+    budget: Option<&AllocBudget>,
+) -> Result<usize, DxfError> {
+    let cap = section_cap(file_len).min((pages as u64).saturating_mul(AC21_MAX_PAGE_BUFFER as u64));
+    if total > cap {
+        return Err(DxfError::LimitExceeded {
+            what: "section size",
+            value: total,
+            limit: cap,
+        });
+    }
+    let len = usize::try_from(total).map_err(|_| DxfError::LimitExceeded {
+        what: "section size",
+        value: total,
+        limit: usize::MAX as u64,
+    })?;
+    if let Some(budget) = budget {
+        if !budget.allows(len) {
+            return Err(DxfError::BudgetExceeded {
+                what: "section",
+                requested: total,
+            });
+        }
+    }
+    Ok(len)
+}
+
 fn decode_ac21_page(
     encoded: &[u8],
     total_size: usize,
@@ -179,17 +216,39 @@ fn decode_ac21_page(
     block_size: usize,
     compressed_size: u64,
     uncompressed_size: u64,
+    budget: Option<&AllocBudget>,
 ) -> Result<Vec<u8>, DxfError> {
-    let mut compressed_data = vec![0u8; total_size];
+    let mut compressed_data = zeroed_vec(total_size, AC21_MAX_PAGE_BUFFER, budget, "AC21 page")?;
     reed_solomon_decode(encoded, &mut compressed_data, factor, block_size);
     if compressed_size == uncompressed_size {
         compressed_data.truncate(uncompressed_size as usize);
         return Ok(compressed_data);
     }
 
-    let mut padded_source = vec![0u8; compressed_data.len() + 64];
+    if uncompressed_size > AC21_MAX_PAGE_BUFFER as u64 {
+        return Err(DxfError::LimitExceeded {
+            what: "AC21 decompressed page",
+            value: uncompressed_size,
+            limit: AC21_MAX_PAGE_BUFFER as u64,
+        });
+    }
+    let mut padded_source = zeroed_vec(
+        compressed_data.len() + 64,
+        AC21_MAX_PAGE_BUFFER + 64,
+        budget,
+        "AC21 page",
+    )?;
     padded_source[..compressed_data.len()].copy_from_slice(&compressed_data);
-    let mut decompressed_data = vec![0u8; uncompressed_size as usize + 64];
+    // `+ 64` is slack for literal runs that end past the declared size.
+    let output_len = (uncompressed_size as usize)
+        .checked_add(64)
+        .ok_or(DxfError::LimitExceeded {
+            what: "AC21 decompressed page",
+            value: uncompressed_size,
+            limit: AC21_MAX_PAGE_BUFFER as u64,
+        })?;
+    let mut decompressed_data =
+        zeroed_vec(output_len, AC21_MAX_PAGE_BUFFER + 64, budget, "AC21 decompressed page")?;
     decompress_ac21(
         &padded_source,
         0,
@@ -970,6 +1029,28 @@ impl<R: Read + Seek> DwgReader<R> {
         }
     }
 
+    /// Length of the underlying stream: the base of every section cap
+    /// (this fork, patch H3).
+    fn stream_len(&mut self) -> Result<u64, DxfError> {
+        let here = self.stream.stream_position()?;
+        let end = self.stream.seek(SeekFrom::End(0))?;
+        self.stream.seek(SeekFrom::Start(here))?;
+        Ok(end)
+    }
+
+    /// Buffer for a preview container of `total` bytes (this fork, patch
+    /// H3). The container lies inside the file, so a size beyond the file length
+    /// is garbage and leaves the preview absent; only the caller's budget stops
+    /// the read.
+    fn preview_buffer(&mut self, total: usize) -> Result<Option<Vec<u8>>, DxfError> {
+        let file_len = usize::try_from(self.stream_len()?).unwrap_or(usize::MAX);
+        match zeroed_vec(total, file_len, self.options.budget.as_ref(), "preview") {
+            Ok(buf) => Ok(Some(buf)),
+            Err(e) if e.is_resource_stop() => Err(e),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// Receive monotonic parsing progress in the inclusive range 0..=1000.
     ///
     /// The callback may run from Rayon worker threads while object records are
@@ -1089,6 +1170,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let stage_started = web_time::Instant::now();
         let info = match self.read_file_header() {
             Ok(info) => info,
+            Err(e) if e.is_resource_stop() => return Err(e),
             Err(e) if failsafe => {
                 report_read_error(
                     &mut self.notifications,
@@ -1155,6 +1237,7 @@ impl<R: Read + Seek> DwgReader<R> {
                     ),
                 }
             }
+            Err(e) if e.is_resource_stop() => return Err(e),
             Err(e) => report_read_error(
                 &mut self.notifications,
                 &mut diagnostics,
@@ -1187,6 +1270,7 @@ impl<R: Read + Seek> DwgReader<R> {
                     ),
                 }
             }
+            Err(e) if e.is_resource_stop() => return Err(e),
             Err(e) => report_read_error(
                 &mut self.notifications,
                 &mut diagnostics,
@@ -1201,7 +1285,11 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // MEASUREMENT is stored in the optional Template section, independently
         // of insertion units. Older files may omit the section entirely.
-        if let Ok(template_buf) = self.get_section_buffer("AcDb:Template", &info) {
+        let template = match self.get_section_buffer("AcDb:Template", &info) {
+            Err(e) if e.is_resource_stop() => return Err(e),
+            other => other,
+        };
+        if let Ok(template_buf) = template {
             match parse_template(&template_buf, dxf_version) {
                 Ok(measurement) => document.header.measurement = measurement,
                 Err(error) if failsafe => report_read_error(
@@ -1248,6 +1336,7 @@ impl<R: Read + Seek> DwgReader<R> {
                     }
                 }
             }
+            Err(e) if e.is_resource_stop() => return Err(e),
             Err(e) => {
                 report_read_error(
                     &mut self.notifications,
@@ -1310,6 +1399,7 @@ impl<R: Read + Seek> DwgReader<R> {
                     ),
                     }
                 }
+                Err(e) if e.is_resource_stop() => return Err(e),
                 Err(e) => report_read_error(
                     &mut self.notifications,
                     &mut diagnostics,
@@ -1336,7 +1426,11 @@ impl<R: Read + Seek> DwgReader<R> {
         //    Store) section. Extract those blobs and attach them, in document
         //    order, to the modeler-geometry entities that arrived with only a
         //    stub. Files without an AcDs section keep their inline data.
-        if let Ok(acds_buf) = self.get_section_buffer("AcDb:AcDsPrototype_1b", &info) {
+        let acds = match self.get_section_buffer("AcDb:AcDsPrototype_1b", &info) {
+            Err(e) if e.is_resource_stop() => return Err(e),
+            other => other,
+        };
+        if let Ok(acds_buf) = acds {
             // Authoritative: the `_data_` record table(s) bind each blob to its
             // owning handle. When present, attach by handle — the only mapping
             // that survives BIM exports whose blob/record/handle orders diverge.
@@ -1404,12 +1498,13 @@ impl<R: Read + Seek> DwgReader<R> {
                         // Guard against a garbage size before allocating.
                         if overall > 0 && overall < 64 * 1024 * 1024 {
                             let total = crate::io::dwg::preview::container_len(overall);
-                            let mut buf = vec![0u8; total];
-                            if self.stream.seek(SeekFrom::Start(base)).is_ok()
-                                && self.stream.read_exact(&mut buf).is_ok()
-                            {
-                                document.preview =
-                                    crate::io::dwg::preview::parse_preview(&buf, base);
+                            if let Some(mut buf) = self.preview_buffer(total)? {
+                                if self.stream.seek(SeekFrom::Start(base)).is_ok()
+                                    && self.stream.read_exact(&mut buf).is_ok()
+                                {
+                                    document.preview =
+                                        crate::io::dwg::preview::parse_preview(&buf, base);
+                                }
                             }
                         }
                     }
@@ -1427,7 +1522,11 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // Document summary information (Author/Title/Subject/… → the
         // Document-category dynamic-text fields).
-        if let Ok(buf) = self.get_section_buffer("AcDb:SummaryInfo", &info) {
+        let summary = match self.get_section_buffer("AcDb:SummaryInfo", &info) {
+            Err(e) if e.is_resource_stop() => return Err(e),
+            other => other,
+        };
+        if let Ok(buf) = summary {
             let utf16 = crate::io::dwg::dwg_version::DwgVersion::from_dxf_version(dxf_version)
                 .map(|v| v.r2007_plus())
                 .unwrap_or(true);
@@ -1474,12 +1573,13 @@ impl<R: Read + Seek> DwgReader<R> {
                         // Guard against a garbage size before allocating.
                         if overall > 0 && overall < 64 * 1024 * 1024 {
                             let total = crate::io::dwg::preview::container_len(overall);
-                            let mut buf = vec![0u8; total];
-                            if self.stream.seek(SeekFrom::Start(base)).is_ok()
-                                && self.stream.read_exact(&mut buf).is_ok()
-                            {
-                                document.preview =
-                                    crate::io::dwg::preview::parse_preview(&buf, base);
+                            if let Some(mut buf) = self.preview_buffer(total)? {
+                                if self.stream.seek(SeekFrom::Start(base)).is_ok()
+                                    && self.stream.read_exact(&mut buf).is_ok()
+                                {
+                                    document.preview =
+                                        crate::io::dwg::preview::parse_preview(&buf, base);
+                                }
                             }
                         }
                     }
@@ -1497,7 +1597,11 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // Document summary information (Author/Title/Subject/… → the
         // Document-category dynamic-text fields).
-        if let Ok(buf) = self.get_section_buffer("AcDb:SummaryInfo", &info) {
+        let summary = match self.get_section_buffer("AcDb:SummaryInfo", &info) {
+            Err(e) if e.is_resource_stop() => return Err(e),
+            other => other,
+        };
+        if let Ok(buf) = summary {
             let utf16 = crate::io::dwg::dwg_version::DwgVersion::from_dxf_version(dxf_version)
                 .map(|v| v.r2007_plus())
                 .unwrap_or(true);
@@ -2339,7 +2443,12 @@ impl<R: Read + Seek> DwgReader<R> {
         // Read encoded data from file
         self.stream
             .seek(SeekFrom::Start(AC21_FILE_HEADER_SIZE + page_offset))?;
-        let mut encoded_buffer = vec![0u8; read_length];
+        let mut encoded_buffer = zeroed_vec(
+            read_length,
+            read_length,
+            self.options.budget.as_ref(),
+            "AC21 encoded page",
+        )?;
         let bytes_read = self.stream.read(&mut encoded_buffer)?;
         if bytes_read < read_length {
             // Pad remaining with zeros
@@ -2353,6 +2462,7 @@ impl<R: Read + Seek> DwgReader<R> {
             block_size,
             compressed_size,
             uncompressed_size,
+            self.options.budget.as_ref(),
         )
     }
 
@@ -2392,8 +2502,15 @@ impl<R: Read + Seek> DwgReader<R> {
                         section_name
                     )));
                 }
+                // An AC15 section is stored raw, so it cannot be larger than the file.
+                let file_len = self.stream_len()?;
+                let mut buf = zeroed_vec(
+                    size as usize,
+                    usize::try_from(file_len).unwrap_or(usize::MAX),
+                    self.options.budget.as_ref(),
+                    "AC15 section",
+                )?;
                 self.stream.seek(SeekFrom::Start(offset as u64))?;
-                let mut buf = vec![0u8; size as usize];
                 self.stream.read_exact(&mut buf)?;
                 if perf {
                     eprintln!(
@@ -2439,8 +2556,16 @@ impl<R: Read + Seek> DwgReader<R> {
         // Field 0x00 ("Data size") holds the total section data size.
         // Field 0x08 ("Max size") is the page partition size per spec §5.4.
         // We truncate to the total data size, not the page size.
-        let total_size = section.compressed_size as usize;
-        let mut result = Vec::with_capacity(total_size);
+        let file_len = self.stream_len()?;
+        let budget = self.options.budget.clone();
+        let total_size = checked_section_alloc(
+            section.compressed_size,
+            file_len,
+            section.pages.len(),
+            budget.as_ref(),
+        )?;
+        let mut result = Vec::new();
+        reserve_vec(&mut result, total_size, total_size, None, "AC21 section")?;
 
         // encoding=1 (stored): contiguous data followed by non-interleaved RS
         // parity. Reading only the payload deliberately skips that parity.
@@ -2476,6 +2601,13 @@ impl<R: Read + Seek> DwgReader<R> {
         for page_batch in section.pages.chunks(batch_pages) {
             let mut prepared = Vec::with_capacity(page_batch.len());
             for page in page_batch {
+                if page.decompressed_size > AC21_MAX_PAGE_BUFFER as u64 {
+                    return Err(DxfError::LimitExceeded {
+                        what: "AC21 page size",
+                        value: page.decompressed_size,
+                        limit: AC21_MAX_PAGE_BUFFER as u64,
+                    });
+                }
                 let fill_size = page.decompressed_size as usize;
                 let payload = match info.page_records.get(&(page.page_number as i32)) {
                     Some(&(page_offset, _)) if encoding == 1 => {
@@ -2483,13 +2615,16 @@ impl<R: Read + Seek> DwgReader<R> {
                             self.stream.seek(SeekFrom::Start(
                                 AC21_FILE_HEADER_SIZE + page_offset as u64,
                             ))?;
-                            let mut bytes = vec![0u8; fill_size];
+                            let mut bytes =
+                                zeroed_vec(fill_size, fill_size, budget.as_ref(), "AC21 page")?;
                             self.stream.read_exact(&mut bytes)?;
                             Ok(bytes)
                         })();
                         match read {
                             Ok(bytes) => PagePayload::Ready(bytes),
-                            Err(error) if failsafe => PagePayload::Failed(error.to_string()),
+                            Err(error) if failsafe && !error.is_resource_stop() => {
+                                PagePayload::Failed(error.to_string())
+                            }
                             Err(error) => return Err(error),
                         }
                     }
@@ -2500,7 +2635,12 @@ impl<R: Read + Seek> DwgReader<R> {
                                     self.stream.seek(SeekFrom::Start(
                                         AC21_FILE_HEADER_SIZE + page_offset as u64,
                                     ))?;
-                                    let mut bytes = vec![0u8; read_length];
+                                    let mut bytes = zeroed_vec(
+                                        read_length,
+                                        read_length,
+                                        budget.as_ref(),
+                                        "AC21 encoded page",
+                                    )?;
                                     let read = self.stream.read(&mut bytes)?;
                                     bytes[read..].fill(0);
                                     Ok(bytes)
@@ -2513,7 +2653,7 @@ impl<R: Read + Seek> DwgReader<R> {
                                         compressed_size: page.compressed_size,
                                         uncompressed_size: page.decompressed_size,
                                     },
-                                    Err(error) if failsafe => {
+                                    Err(error) if failsafe && !error.is_resource_stop() => {
                                         PagePayload::Failed(error.to_string())
                                     }
                                     Err(error) => return Err(error),
@@ -2557,21 +2697,29 @@ impl<R: Read + Seek> DwgReader<R> {
                         block_size,
                         compressed_size,
                         uncompressed_size,
-                    )
-                    .map_err(|error| error.to_string()),
-                    PagePayload::Failed(error) => Err(error),
+                        budget.as_ref(),
+                    ),
+                    PagePayload::Failed(error) => Err(DxfError::Parse(error)),
                 };
                 (page.number, page.fill_size, data)
             });
 
             for (page_number, fill_size, page_result) in decoded {
+                // Bytes past the declared section size are truncated below
+                // anyway; never grow the buffer beyond the checked size.
+                let room = total_size.saturating_sub(result.len());
                 match page_result {
-                    Ok(page_data) => result.extend_from_slice(&page_data),
-                    Err(error) if !failsafe => {
-                        return Err(DxfError::Compression(format!(
-                            "page {} in section '{}': {}",
-                            page_number, section_name, error
-                        )))
+                    Ok(page_data) => {
+                        result.extend_from_slice(&page_data[..page_data.len().min(room)])
+                    }
+                    Err(error) if !failsafe || error.is_resource_stop() => {
+                        return Err(match error {
+                            DxfError::Compression(message) => DxfError::Compression(format!(
+                                "page {} in section '{}': {}",
+                                page_number, section_name, message
+                            )),
+                            other => other,
+                        })
                     }
                     Err(error) => {
                         skipped_pages += 1;
@@ -2582,7 +2730,7 @@ impl<R: Read + Seek> DwgReader<R> {
                                 page_number, section_name, error
                             ),
                         );
-                        result.resize(result.len() + fill_size, 0);
+                        result.resize(result.len() + fill_size.min(room), 0);
                     }
                 }
             }
@@ -2633,13 +2781,19 @@ impl<R: Read + Seek> DwgReader<R> {
             })?;
 
         // compressed_size field actually holds the total uncompressed section data size
-        let total_size = section.compressed_size as usize;
+        let file_len = self.stream_len()?;
+        let budget = self.options.budget.clone();
+        let total_size = checked_section_alloc(
+            section.compressed_size,
+            file_len,
+            section.pages.len(),
+            budget.as_ref(),
+        )?;
         let is_compressed = section.encoding == 2;
         let max_page_size = section.decompressed_size as usize;
         let failsafe = self.options.failsafe;
-        let budget = self.options.budget.clone();
 
-        let mut result = vec![0u8; total_size];
+        let mut result = zeroed_vec(total_size, total_size, None, "AC18 section")?;
         let batch_pages = worker_count().saturating_mul(2);
 
         for page_batch in section.pages.chunks(batch_pages) {
@@ -2683,7 +2837,12 @@ impl<R: Read + Seek> DwgReader<R> {
                     );
                     continue;
                 }
-                let mut compressed = vec![0u8; data_compressed_size as usize];
+                let mut compressed = zeroed_vec(
+                    data_compressed_size as usize,
+                    10_000_000,
+                    budget.as_ref(),
+                    "AC18 page",
+                )?;
                 self.stream.read_exact(&mut compressed)?;
 
                 prepared.push((page_number, data_offset as usize, compressed));
@@ -3308,6 +3467,54 @@ mod hardening_tests {
         let raw = ac18_system_page(-1, 1, &[9, 8, 7]);
         let data = read_system_page_ac18(&mut Cursor::new(raw), None, "page map").unwrap();
         assert_eq!(data, vec![9, 8, 7]);
+    }
+
+    #[test]
+    fn section_sizes_are_capped_by_file_length_and_page_count() {
+        let err = checked_section_alloc(1 << 40, 1 << 20, 4, None).unwrap_err();
+        assert!(matches!(err, DxfError::LimitExceeded { .. }), "{err:?}");
+        // A section that claims twice its real size still passes the cap.
+        let real = 4 * 0x7400u64;
+        assert_eq!(checked_section_alloc(2 * real, 1 << 20, 4, None).unwrap(), 2 * real as usize);
+        let err = checked_section_alloc(1, 1 << 20, 0, None).unwrap_err();
+        assert!(matches!(err, DxfError::LimitExceeded { .. }), "{err:?}");
+        let refuse = AllocBudget::new(|_| false);
+        let err = checked_section_alloc(1000, 1 << 20, 1, Some(&refuse)).unwrap_err();
+        assert!(matches!(err, DxfError::BudgetExceeded { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn ac21_page_with_impossible_uncompressed_size_is_an_error() {
+        let encoded = [0u8; 255];
+        let (result, largest) = crate::io::limits::hardening_tests::largest_request_during(|| {
+            std::panic::catch_unwind(|| decode_ac21_page(&encoded, 251, 1, 251, 8, u64::MAX, None))
+        });
+        assert!(
+            matches!(result, Ok(Err(DxfError::LimitExceeded { .. }))),
+            "expected LimitExceeded without panicking"
+        );
+        assert!(largest < 64 << 20, "a {largest}-byte request reached the allocator");
+    }
+
+    #[test]
+    fn ac21_page_scratch_copy_is_budgeted() {
+        let encoded = [0u8; 255];
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = std::sync::Arc::clone(&asked);
+        // Refuse the 64-byte-padded copy of the 251-byte page.
+        let budget = AllocBudget::new(move |bytes| {
+            record.lock().unwrap().push(bytes);
+            bytes != 251 + 64
+        });
+        let result = decode_ac21_page(&encoded, 251, 1, 251, 8, 16, Some(&budget));
+        assert!(
+            matches!(
+                result,
+                Err(DxfError::BudgetExceeded { what: "AC21 page", requested: 315 })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(*asked.lock().unwrap(), vec![251, 315]);
     }
 
     #[test]

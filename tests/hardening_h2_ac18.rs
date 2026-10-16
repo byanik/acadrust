@@ -188,32 +188,22 @@ fn a_refused_budget_stops_the_section_read_even_in_failsafe() {
     let bytes = ac18_document_bytes();
     // The page map (120 bytes) and the section map (1380 bytes) are far smaller
     // than a data page (0x7400 bytes), so this budget lets the system pages
-    // through and refuses every data page.
+    // through and refuses every data page. H3 makes the refusal abort the whole
+    // read in both modes instead of turning into an `*-extract-failed` diagnostic.
     for options in [DwgReadOptions::default(), DwgReadOptions::failsafe()] {
         let failsafe = options.failsafe;
         let options = DwgReadOptions {
             budget: Some(AllocBudget::new(|bytes| bytes < 0x7400)),
             ..options
         };
-        let outcome = no_panic("budget read", || {
+        let result = no_panic("budget read", || {
             DwgReader::from_stream_with_options(Cursor::new(bytes.clone()), options)
                 .read_with_stats()
-        })
-        .unwrap();
-        let refusals: Vec<_> = outcome
-            .stats
-            .diagnostics
-            .iter()
-            .filter(|d| {
-                d.code.ends_with("-extract-failed")
-                    && d.message.contains("Allocation budget exceeded")
-            })
-            .collect();
+        });
         assert!(
-            !refusals.is_empty(),
-            "failsafe={failsafe}: the refusal was skipped as a corrupt page: {:?}",
-            outcome.stats.diagnostics
+            matches!(result, Err(DxfError::BudgetExceeded { .. })),
+            "failsafe={failsafe}: the refusal must reach the caller: {:?}",
+            result.map(|outcome| outcome.stats.diagnostics)
         );
-        assert_eq!(outcome.stats.output_entities, 0, "failsafe={failsafe}");
     }
 }
