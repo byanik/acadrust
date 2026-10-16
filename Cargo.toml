@@ -550,6 +550,10 @@ path = "tests/hardening_surface.rs"
 name = "hardening_f16_readonly"
 path = "tests/hardening_f16_readonly.rs"
 
+[[test]]
+name = "hardening_f9_f10"
+path = "tests/hardening_f9_f10.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 

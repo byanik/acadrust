@@ -438,6 +438,13 @@ fn mtext_from_data(data: entities::MTextData, common: EntityCommon, maps: &Handl
     e
 }
 
+/// This fork (F10): the unused fixed object type whose empty stubs are
+/// skipped silently.
+const TYPE55_STUB_TYPE: i16 = 55;
+/// This fork (F10): largest stub frame skipped silently; the observed
+/// stubs are 11 bytes (MS, MC, 6 data bytes, CRC-16).
+const TYPE55_STUB_MAX_FRAME: usize = 16;
+
 /// Builds a `CadDocument` from parsed DWG object data.
 pub struct DwgDocumentBuilder {
     obj_reader: DwgObjectReader,
@@ -836,6 +843,18 @@ impl DwgDocumentBuilder {
                 let (obj_handle, type_code, eed_raw_pass1, xdic_pass1, reactors_pass1) =
                     match result {
                         Ok(v) if reader.check_error().is_ok() => v,
+                        _ if type_code == TYPE55_STUB_TYPE
+                            && self
+                                .obj_reader
+                                .is_crc_valid_record_within(offset, TYPE55_STUB_MAX_FRAME) =>
+                        {
+                            // This fork (F10): type 55 is an unused fixed
+                            // type inside the table range. AutoCAD leaves
+                            // CRC-valid stubs of it with no payload; they hold
+                            // nothing to keep, so they are neither reported nor
+                            // counted as skipped.
+                            continue;
+                        }
                         _ => {
                             skipped_pass1 += 1;
                             let message = format!(

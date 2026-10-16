@@ -177,6 +177,38 @@ impl DwgObjectReader {
         })
     }
 
+    /// `true` when the record frame at `offset` — MS size, R2010+ MC handle
+    /// bits, data and CRC-16 — is at most `max_frame` bytes long and its CRC
+    /// matches (this fork, patch F10).
+    pub(crate) fn is_crc_valid_record_within(&self, offset: usize, max_frame: usize) -> bool {
+        let Some(frame) = self.data.get(offset..) else {
+            return false;
+        };
+        let Ok((size, ms_len)) = read_modular_short(frame) else {
+            return false;
+        };
+        let mut data_start = ms_len;
+        if self.version.r2010_plus() {
+            let Ok((_, mc_len)) = read_modular_char(&frame[data_start..]) else {
+                return false;
+            };
+            data_start += mc_len;
+        }
+        let Some(crc_start) = data_start.checked_add(size) else {
+            return false;
+        };
+        if crc_start.saturating_add(2) > max_frame {
+            return false;
+        }
+        match (frame.get(..crc_start), frame.get(crc_start..crc_start + 2)) {
+            (Some(body), Some(stored)) => {
+                crate::io::dwg::crc::crc16(crate::io::dwg::crc::CRC16_SEED, body)
+                    == u16::from_le_bytes([stored[0], stored[1]])
+            }
+            _ => false,
+        }
+    }
+
     /// Read only the type prefix of an object record.
     /// Pass-1 cataloguing needs no payload, text, or handle cursor; avoiding a
     /// full record allocation here removes one complete copy of every entity.
