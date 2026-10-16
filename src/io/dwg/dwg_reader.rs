@@ -117,6 +117,44 @@ mod template_tests {
 /// AC1021 file header offset (data pages start after this)
 const AC21_FILE_HEADER_SIZE: u64 = 0x480;
 
+/// Read an AC18 system page (page map or section map): the 20-byte unmasked
+/// header, the compressed bytes, then LZ77 decompression. Both sizes come from
+/// the file and are checked before any allocation (this fork, patch H2).
+fn read_system_page_ac18<S: Read>(
+    stream: &mut S,
+    budget: Option<&crate::io::limits::AllocBudget>,
+    what: &str,
+) -> Result<Vec<u8>, DxfError> {
+    // Read 20-byte system page header (NOT XOR-masked)
+    let _section_type = stream.read_i32::<LittleEndian>()?;
+    let decomp_size = stream.read_i32::<LittleEndian>()?;
+    let comp_size = stream.read_i32::<LittleEndian>()?;
+    let compression = stream.read_i32::<LittleEndian>()?;
+    let _checksum = stream.read_u32::<LittleEndian>()?;
+
+    // Read compressed data
+    if comp_size <= 0 || comp_size > 10_000_000 {
+        return Err(DxfError::InvalidFormat(format!(
+            "Invalid AC18 {} compressed size: {}",
+            what, comp_size
+        )));
+    }
+    let mut compressed = vec![0u8; comp_size as usize];
+    stream.read_exact(&mut compressed)?;
+    if compression != 2 {
+        return Ok(compressed);
+    }
+
+    // Decompress; a negative i32 must never become a huge usize.
+    let decomp_size = usize::try_from(decomp_size).map_err(|_| {
+        DxfError::InvalidFormat(format!(
+            "Negative AC18 {} decompressed size: {}",
+            what, decomp_size
+        ))
+    })?;
+    decompress_ac18(&compressed, decomp_size, budget)
+}
+
 fn ac21_page_layout(
     compressed_size: u64,
     correction_factor: u64,
@@ -1860,30 +1898,8 @@ impl<R: Read + Seek> DwgReader<R> {
         page_map_address: u64,
     ) -> Result<(), DxfError> {
         self.stream.seek(SeekFrom::Start(page_map_address))?;
-
-        // Read 20-byte system page header (NOT XOR-masked)
-        let _section_type = self.stream.read_i32::<LittleEndian>()?;
-        let decomp_size = self.stream.read_i32::<LittleEndian>()?;
-        let comp_size = self.stream.read_i32::<LittleEndian>()?;
-        let compression = self.stream.read_i32::<LittleEndian>()?;
-        let _checksum = self.stream.read_u32::<LittleEndian>()?;
-
-        // Read compressed data
-        if comp_size <= 0 || comp_size > 10_000_000 {
-            return Err(DxfError::InvalidFormat(format!(
-                "Invalid AC18 page map compressed size: {}",
-                comp_size
-            )));
-        }
-        let mut compressed = vec![0u8; comp_size as usize];
-        self.stream.read_exact(&mut compressed)?;
-
-        // Decompress
-        let decompressed = if compression == 2 {
-            decompress_ac18(&compressed, decomp_size as usize)
-        } else {
-            compressed
-        };
+        let decompressed =
+            read_system_page_ac18(&mut self.stream, self.options.budget.as_ref(), "page map")?;
 
         // Parse (page_number, page_size) pairs.
         // Pages are written sequentially starting at file offset 0x100.
@@ -1940,30 +1956,8 @@ impl<R: Read + Seek> DwgReader<R> {
         })?;
 
         self.stream.seek(SeekFrom::Start(page_offset as u64))?;
-
-        // Read 20-byte system page header (NOT XOR-masked)
-        let _section_type = self.stream.read_i32::<LittleEndian>()?;
-        let decomp_size = self.stream.read_i32::<LittleEndian>()?;
-        let comp_size = self.stream.read_i32::<LittleEndian>()?;
-        let compression = self.stream.read_i32::<LittleEndian>()?;
-        let _checksum = self.stream.read_u32::<LittleEndian>()?;
-
-        // Read compressed data
-        if comp_size <= 0 || comp_size > 10_000_000 {
-            return Err(DxfError::InvalidFormat(format!(
-                "Invalid AC18 section map compressed size: {}",
-                comp_size
-            )));
-        }
-        let mut compressed = vec![0u8; comp_size as usize];
-        self.stream.read_exact(&mut compressed)?;
-
-        // Decompress
-        let decompressed = if compression == 2 {
-            decompress_ac18(&compressed, decomp_size as usize)
-        } else {
-            compressed
-        };
+        let decompressed =
+            read_system_page_ac18(&mut self.stream, self.options.budget.as_ref(), "section map")?;
 
         // Parse section descriptors
         let mut cursor = Cursor::new(&decompressed);
@@ -2642,6 +2636,8 @@ impl<R: Read + Seek> DwgReader<R> {
         let total_size = section.compressed_size as usize;
         let is_compressed = section.encoding == 2;
         let max_page_size = section.decompressed_size as usize;
+        let failsafe = self.options.failsafe;
+        let budget = self.options.budget.clone();
 
         let mut result = vec![0u8; total_size];
         let batch_pages = worker_count().saturating_mul(2);
@@ -2690,19 +2686,33 @@ impl<R: Read + Seek> DwgReader<R> {
                 let mut compressed = vec![0u8; data_compressed_size as usize];
                 self.stream.read_exact(&mut compressed)?;
 
-                prepared.push((data_offset as usize, compressed));
+                prepared.push((page_number, data_offset as usize, compressed));
             }
 
-            let decoded = map_ordered(prepared, |(dst_start, compressed)| {
+            let decoded = map_ordered(prepared, |(page_number, dst_start, compressed)| {
                 let decompressed = if is_compressed {
-                    decompress_ac18(&compressed, max_page_size)
+                    decompress_ac18(&compressed, max_page_size, budget.as_ref())
                 } else {
-                    compressed
+                    Ok(compressed)
                 };
-                (dst_start, decompressed)
+                (page_number, dst_start, decompressed)
             });
 
-            for (dst_start, decompressed) in decoded {
+            for (page_number, dst_start, decompressed) in decoded {
+                let decompressed = match decompressed {
+                    Ok(decompressed) => decompressed,
+                    Err(error) if failsafe && !error.is_resource_stop() => {
+                        self.notifications.notify(
+                            NotificationType::Error,
+                            format!(
+                                "Failsafe: skipped corrupt page {} in section '{}': {}",
+                                page_number, section_name, error
+                            ),
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if dst_start < total_size {
                     let copy_len = decompressed.len().min(total_size - dst_start);
                     result[dst_start..dst_start + copy_len]
@@ -3256,6 +3266,48 @@ mod hardening_tests {
                 "compr_len {compr_len}: expected an error without panicking"
             );
         }
+    }
+
+    fn ac18_system_page(decomp_size: i32, compression: i32, payload: &[u8]) -> Vec<u8> {
+        let mut page = Vec::new();
+        page.extend_from_slice(&0x4163_0003i32.to_le_bytes()); // section type
+        page.extend_from_slice(&decomp_size.to_le_bytes());
+        page.extend_from_slice(&(payload.len() as i32).to_le_bytes());
+        page.extend_from_slice(&compression.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes()); // checksum
+        page.extend_from_slice(payload);
+        page
+    }
+
+    #[test]
+    fn ac18_system_page_rejects_negative_and_huge_sizes() {
+        for decomp_size in [-1, i32::MIN, 0x7FFF_FFFF] {
+            let page = ac18_system_page(decomp_size, 2, &[0x01, 1, 2, 3, 4, 0x11]);
+            let (result, largest) =
+                crate::io::limits::hardening_tests::largest_request_during(|| {
+                    std::panic::catch_unwind(|| {
+                        read_system_page_ac18(&mut Cursor::new(page.clone()), None, "page map")
+                    })
+                });
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "decomp_size {decomp_size}: expected an error without panicking"
+            );
+            assert!(
+                largest < 64 << 20,
+                "decomp_size {decomp_size}: a {largest}-byte request reached the allocator"
+            );
+        }
+    }
+
+    #[test]
+    fn ac18_system_page_reads_valid_pages() {
+        let page = ac18_system_page(4, 2, &[0x01, 1, 2, 3, 4, 0x11]);
+        let data = read_system_page_ac18(&mut Cursor::new(page), None, "page map").unwrap();
+        assert_eq!(data, vec![1, 2, 3, 4]);
+        let raw = ac18_system_page(-1, 1, &[9, 8, 7]);
+        let data = read_system_page_ac18(&mut Cursor::new(raw), None, "page map").unwrap();
+        assert_eq!(data, vec![9, 8, 7]);
     }
 
     #[test]

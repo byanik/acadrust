@@ -423,6 +423,10 @@ path = "tests/hardening_limits.rs"
 name = "hardening_h1_ac21"
 path = "tests/hardening_h1_ac21.rs"
 
+[[test]]
+name = "hardening_h2_ac18"
+path = "tests/hardening_h2_ac18.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 

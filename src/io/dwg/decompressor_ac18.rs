@@ -17,20 +17,40 @@
 //! Based on the ODA (Open Design Alliance) specification and matched against
 //! the compressor in [`super::compression`].
 
+use crate::error::DxfError;
+use crate::io::limits::{reserve_vec, AllocBudget, AC18_MAX_PAGE_DECOMPRESSED};
+
 /// Decompress AC18 LZ77-compressed data.
+///
+/// `decompressed_size` comes from the file: it is checked against
+/// [`AC18_MAX_PAGE_DECOMPRESSED`] and the caller's budget before any memory
+/// is reserved, and a back-reference before the start of the output is an
+/// error (this fork, patch H2).
 ///
 /// # Arguments
 /// * `source` – Compressed byte stream
 /// * `decompressed_size` – Expected output size
+/// * `budget` – Optional byte budget asked before the output is reserved
 ///
 /// # Returns
 /// Decompressed data, truncated to `decompressed_size`.
-pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
-    let mut output = Vec::with_capacity(decompressed_size);
+pub fn decompress_ac18(
+    source: &[u8],
+    decompressed_size: usize,
+    budget: Option<&AllocBudget>,
+) -> Result<Vec<u8>, DxfError> {
+    let mut output = Vec::new();
+    reserve_vec(
+        &mut output,
+        decompressed_size,
+        AC18_MAX_PAGE_DECOMPRESSED,
+        budget,
+        "AC18 decompressed page",
+    )?;
     let mut si = 0; // source index
 
     if source.is_empty() || decompressed_size == 0 {
-        return output;
+        return Ok(output);
     }
 
     // ── Initial literal run ──
@@ -73,7 +93,7 @@ pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
             let offset = (((opcode as usize) & 0x0C) >> 2 | (b1 << 2)) + 1;
             let trailing = (opcode & 0x03) as usize;
 
-            copy_match(&mut output, offset, length, decompressed_size);
+            copy_match(&mut output, offset, length, decompressed_size)?;
             copy_literals(source, &mut si, &mut output, trailing, decompressed_size);
         } else if opcode >= 0x21 {
             // ── Medium match, short length (0x21–0x3F) ──
@@ -88,7 +108,7 @@ pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
             let offset = ((b1 >> 2) | (b2 << 6)) + 1;
             let trailing = b1 & 0x03;
 
-            copy_match(&mut output, offset, length, decompressed_size);
+            copy_match(&mut output, offset, length, decompressed_size)?;
             copy_literals(source, &mut si, &mut output, trailing, decompressed_size);
         } else if opcode == 0x20 {
             // ── Medium match, extended length ──
@@ -103,7 +123,7 @@ pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
             let offset = ((b1 >> 2) | (b2 << 6)) + 1;
             let trailing = b1 & 0x03;
 
-            copy_match(&mut output, offset, length, decompressed_size);
+            copy_match(&mut output, offset, length, decompressed_size)?;
             copy_literals(source, &mut si, &mut output, trailing, decompressed_size);
         } else if opcode == 0x11 {
             // ── END marker ──
@@ -127,7 +147,7 @@ pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
             let offset = ((b1 >> 2) | (b2 << 6) | ((opcode as usize & 0x08) << 11)) + 0x4000;
             let trailing = b1 & 0x03;
 
-            copy_match(&mut output, offset, length, decompressed_size);
+            copy_match(&mut output, offset, length, decompressed_size)?;
             copy_literals(source, &mut si, &mut output, trailing, decompressed_size);
         } else {
             // ── Literal run (0x00–0x0F, after match with trailing=0) ──
@@ -141,7 +161,7 @@ pub fn decompress_ac18(source: &[u8], decompressed_size: usize) -> Vec<u8> {
     }
 
     output.truncate(decompressed_size);
-    output
+    Ok(output)
 }
 
 /// Read an extended length value from the compressed stream.
@@ -187,24 +207,38 @@ fn copy_literals(
 }
 
 /// Copy a match from earlier in the output buffer (back-reference).
+///
+/// A reference that starts before the output is corrupt data; upstream
+/// emitted zeros for it (this fork, patch H2).
 #[inline]
-fn copy_match(output: &mut Vec<u8>, offset: usize, length: usize, max_size: usize) {
-    let start = output.len().saturating_sub(offset);
+fn copy_match(
+    output: &mut Vec<u8>,
+    offset: usize,
+    length: usize,
+    max_size: usize,
+) -> Result<(), DxfError> {
+    if offset > output.len() {
+        return Err(DxfError::Compression(format!(
+            "AC18 LZ77: back-reference {} bytes before a {}-byte output",
+            offset,
+            output.len()
+        )));
+    }
+    let start = output.len() - offset;
     for i in 0..length {
         if output.len() >= max_size {
             break;
         }
-        let idx = start + i;
-        if idx < output.len() {
-            // Must index one-at-a-time because the output grows during the copy
-            // (overlapping matches, e.g., run-length encoding of repeating bytes).
-            let byte = output[idx];
-            output.push(byte);
-        } else {
-            // Reference beyond output — emit zero (shouldn't happen in valid data)
-            output.push(0);
-        }
+        // Must index one-at-a-time because the output grows during the copy
+        // (overlapping matches, e.g., run-length encoding of repeating bytes).
+        let Some(&byte) = output.get(start + i) else {
+            return Err(DxfError::Compression(
+                "AC18 LZ77: zero-offset back-reference".to_string(),
+            ));
+        };
+        output.push(byte);
     }
+    Ok(())
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -220,7 +254,7 @@ mod tests {
     fn roundtrip(data: &[u8]) {
         let mut comp = DwgLZ77AC18Compressor::new();
         let compressed = comp.compress(data, 0, data.len());
-        let decompressed = decompress_ac18(&compressed, data.len());
+        let decompressed = decompress_ac18(&compressed, data.len(), None).unwrap();
         assert_eq!(
             decompressed.len(),
             data.len(),
@@ -312,13 +346,14 @@ mod tests {
 
     #[test]
     fn test_decompress_empty() {
-        let result = decompress_ac18(&[], 0);
+        let result = decompress_ac18(&[], 0, None).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_decompress_zero_target() {
-        let result = decompress_ac18(&[0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x00, 0x00], 0);
+        let result =
+            decompress_ac18(&[0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x00, 0x00], 0, None).unwrap();
         assert!(result.is_empty());
     }
 

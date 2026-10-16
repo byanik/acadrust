@@ -120,7 +120,7 @@ pub(crate) fn section_cap(file_len: u64) -> u64 {
 }
 
 #[cfg(test)]
-mod hardening_tests {
+pub(crate) mod hardening_tests {
     use super::*;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
@@ -162,7 +162,8 @@ mod hardening_tests {
     #[global_allocator]
     static PROBE: ThreadMaxAlloc = ThreadMaxAlloc;
 
-    fn largest_request_during<R>(f: impl FnOnce() -> R) -> (R, usize) {
+    /// Largest allocation request made by this thread while `f` ran.
+    pub(crate) fn largest_request_during<R>(f: impl FnOnce() -> R) -> (R, usize) {
         MAX_REQUEST.with(|max| max.set(0));
         let out = f();
         (out, MAX_REQUEST.with(|max| max.get()))
