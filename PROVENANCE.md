@@ -56,6 +56,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | C1 | acadrust(C1): CancelToken checked at stage, page and batch boundaries | src/io/limits.rs; src/io/dwg/dwg_reader.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_c1_cancel.rs | This fork (original work) | tests/hardening_c1_cancel.rs |
 | H4 | acadrust(H4): clamp DXF HATCH 93, LTYPE 73 and DGN counts | src/io/dxf/reader/section_reader.rs; Cargo.toml; tests/hardening_h4_dxf.rs; tests/hardening/h4_*.dxf | This fork (original work); clamp pattern from upstream (HATCH pattern-boundary reader) | tests/hardening_h4_dxf.rs |
 | F17 | acadrust(F17): per-entity DXF failsafe; linear block membership | src/document.rs; src/tables/mod.rs; src/io/dxf/reader.rs; src/io/dxf/reader/section_reader.rs; src/io/dxf/reader/text_reader.rs; Cargo.toml; tests/hardening_f17_dxf.rs | This fork (original work) | tests/hardening_f17_dxf.rs (complexity test: --release --ignored); src/document.rs::hardening_f17_tests; src/io/dxf/reader/section_reader.rs::hardening_f17_tests |
+| F11 | acadrust(F11): provenance inventory of LibreDWG-citing files | PROVENANCE.md | This fork (inventory; no code change) | `git grep` command in "LibreDWG-citing files (F11 inventory)" |
 
 ## Limits (H2, H3)
 
@@ -71,3 +72,28 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 A refused budget (`BudgetExceeded`) is not file corruption: it is returned by `read*` in failsafe mode too, never turned into a diagnostic. A size above a format limit (`LimitExceeded`) is corruption: that section read fails and the document read records an `*-extract-failed` diagnostic and carries on, like any other unreadable section (a file-header failure is an error in strict mode).
 
 Acceptance: no synthetic, public or corpus file is rejected by these caps (T10 corpus gate).
+
+## LibreDWG-citing files (F11 inventory)
+
+LibreDWG is GPL. No fork patch consults it, and no LibreDWG source or binary enters this
+repository. Upstream acadrust 0.6.4 cites LibreDWG, or its `dwg.spec`, `dwg2.spec` and `acds.spec`
+files, in comments in the 12 files below. This inventory changes no code. What to do with the
+flagged decoders is founder decision C21 (design §11 Q1); fork patches do not edit these lines.
+Regenerate the list with:
+
+    git grep -n -i -E 'libredwg|dwg2?\.spec|acds\.spec' -- Core/third_party/acadrust/src
+
+| File | Citing lines (at F11) | What follows the cited layout or remark | Built into the shipped reader | Flag |
+|---|---|---|---|---|
+| src/objects/object_context_data.rs | 34, 47, 88, 99 | `ObjectContextKind` placement payloads ("follow LibreDWG dwg2.spec"), the MText field order, the Dimension subtype tails and the `class_version` default remark | yes | **C21**: annotative representations (spec P0), MULTILEADER context data |
+| src/io/dwg/dwg_stream_readers/object_reader/entities.rs | 5263, 5275, 5298, 5382, 5403, 5825, 6163, 6211 | `read_acis_entity_impl` (SAT/SAB framing, COMMON_3DSOLID) and `read_wire` (`Dwg_3DSOLID_wire`); 6163 and 6211 are unit tests | yes | **C21**: 3DSOLID/REGION/BODY layout |
+| src/io/dwg/dwg_stream_writers/object_writer/entities.rs | 3177, 3179, 4370, 5614, 5657, 5789 | writer: `write_mline` cap flags, `write_multileader`, `write_acis_data_impl`, `write_acis_wireframe` | no (writer; gated by F16) | MULTILEADER / 3DSOLID layout |
+| src/io/dwg/dwg_stream_writers/object_writer/objects.rs | 21, 1589 | writer: resbuf value types, `write_dictionary` item handles | no (writer; gated by F16) | — |
+| src/io/dwg/dwg_writer.rs | 1975 | writer: `build_acds_prototype` (`acds.spec`) | no (writer; gated by F16) | — |
+| src/io/dxf/writer/section_writer.rs | 7063 | writer: remark on dictionary group code 360 | no (writer; gated by F16) | — |
+| src/io/dwg/dwg_document_builder.rs | 7498, 7535 | `decode_section_view_style` (class 795) field order | yes | non-graphical decoder |
+| src/objects/class_object.rs | 4 | module doc: payloads of class-based non-graphical objects | yes | **C21** scope: non-graphical decoders |
+| src/io/dxf/reader/section_reader/associative.rs | 999 | `read_dimension_association_dxf`: remark that `dwg2.spec` orders the dimension handle differently | yes | — |
+| src/objects/associative.rs | 1356 | class-name alias remark ("seen in Autodesk/LibreDWG class tables") | yes | — |
+| src/classes/mod.rs | 168 | remark that readers (libredwg, AutoCAD) resolve classes by index | yes | — |
+| src/io/dwg/reed_solomon.rs | 697–775 (22 lines) | unit tests only: Reed-Solomon tables cross-checked against values from LibreDWG `reedsolomon.c` | no (`#[cfg(test)]`) | test vectors |
