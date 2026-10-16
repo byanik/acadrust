@@ -554,6 +554,11 @@ path = "tests/hardening_f16_readonly.rs"
 name = "hardening_f9_f10"
 path = "tests/hardening_f9_f10.rs"
 
+[[test]]
+name = "hardening_f9_sweep"
+path = "tests/hardening_f9_sweep.rs"
+required-features = ["writers"]
+
 [dependencies.anyhow]
 version = "1.0"
 
