@@ -61,6 +61,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | F16 | acadrust(F16): gate DWG/DXF writers and import behind features | Cargo.toml; src/lib.rs; src/io/mod.rs; src/io/dwg/mod.rs; src/io/dwg/file_headers/mod.rs; src/io/dxf/mod.rs; src/io/dwg/embedded_entity.rs; src/io/dwg/r12/mod.rs; src/io/loft_parameters.rs; src/io/loft_surface_curves.rs; src/io/surface_history.rs; src/objects/mod.rs; 13 upstream unit-test modules (cfg only); tests/hardening_f16_readonly.rs | This fork (original work); writers stay in the fork for upstream tests and the fixture generator (decision D-7) | tests/hardening_f16_readonly.rs; src/io/dwg/embedded_entity.rs::hardening_tests (opaque without writers, typed with writers) |
 | F9 | acadrust(F9): cherry-pick upstream 0e46236 (#134 auxiliary classes) | src/io/dwg/dwg_document_builder.rs; src/io/dwg/dwg_reader.rs; tests/issue134.rs; Cargo.toml | Upstream acadrust 0e4623614469db8e1eb168953884649f1a961868 (MPL-2.0, author Hakan Ak); context conflicts in dwg_document_builder.rs (upstream parent b62555f #133, fork patch C1) resolved by hand; added/removed lines identical to upstream (`git patch-id --stable` of the -U0 diff = 78ac6a65205edf9951c72c704ba53c7966cbff4d) | tests/issue134.rs (upstream); tests/hardening_f9_sweep.rs (this fork: damaged-record sweep, no panic escapes the recovery) |
 | F10 | acadrust(F10): skip CRC-valid empty type-55 stubs silently | src/io/dwg/dwg_document_builder.rs; src/io/dwg/dwg_stream_readers/object_reader/mod.rs; Cargo.toml; tests/hardening_f9_f10.rs | This fork (original work); stub shape from the spike verifier (11-byte CRC-valid records of the unused fixed type 55) | tests/hardening_f9_f10.rs |
+| F3 | acadrust(F3): decode AcDbImpBlockRefPathObjectId, persistent subent ids, VX flags | src/io/dwg/dwg_stream_readers/object_reader/associative.rs; src/io/dwg/dwg_stream_readers/object_reader/tables.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_f3_decode.rs | Re-derived (see "F3 provenance"); LibreDWG consulted: no | tests/hardening_f3_decode.rs |
 
 ## Limits (H2, H3)
 
@@ -101,3 +102,32 @@ Regenerate the list with:
 | src/objects/associative.rs | 1356 | class-name alias remark ("seen in Autodesk/LibreDWG class tables") | yes | — |
 | src/classes/mod.rs | 168 | remark that readers (libredwg, AutoCAD) resolve classes by index | yes | — |
 | src/io/dwg/reed_solomon.rs | 697–775 (22 lines) | unit tests only: Reed-Solomon tables cross-checked against values from LibreDWG `reedsolomon.c` | no (`#[cfg(test)]`) | test vectors |
+
+## F3 provenance
+
+The spike carried a draft of this fix (`docs/spike/kod/yamalar/okunamayan-kayitlar.patch`
+in the downstream repository). That draft was **not copied**: the layouts below were re-derived and the
+code was written again for this commit. **LibreDWG consulted: no** (neither its source nor its spec
+files).
+
+| Fix | Layout | Sources |
+|---|---|---|
+| A: `AcDbImpBlockRefPathObjectId` dependency name | After `has_name` + `name`, a dependency whose name is a compound-object-id class stores that class's payload: BS version (always 0), BL path length, then per element RS tag (0x0001) + handle | Spike bit traces of corpus records (aggregate only): the tag was 0x0001 in 226 of 226 elements, and with this layout all 172 ACDBASSOCGEOMDEPENDENCY records in the corpus end exactly at their last bit; acadrust's own `read_dependency` frame (field order before and after the payload) |
+| B: persistent sub-entity id | R2013+ (AC1027+): B flag + BL class code; R2007–R2010: TV class name (`AcDbAssocEdgePersSubentId` → code 3). Code 1: no fields; code 2: BS, BL, BL, B; code 3: BS, BL, BL; unknown codes keep upstream's greedy BL loop; the compound-object bit ends the record | Spike bit traces: 138 records; the 5 code-2 records that overran by 2 bits now end exactly. The R2007–R2010 text form is inferred from the same traces and is the least certain part |
+| C: VX_TABLE_RECORD xref flags | Same version-dependent table-record layout as every other table record: R2007+ stores only BS xrefindex+1 (Xdep is bit 0x100); R13–R2000 store B 64-flag, BS xrefindex+1, B Xdep | acadrust's own `read_xref_table_flags`, already used by the other table-record readers; ACadSharp `DwgObjectReader.readXrefDependantBit` (MIT); the common table-record fields of the ODA Open Design Specification for .dwg files (consulted for reference; the document is not part of this fork); spike traces: all 12 VX records then end exactly and their CRCs are valid |
+
+Interactions:
+- **F9** (upstream #134) recovers ACDBASSOCGEOMDEPENDENCY records that still fail to decode as opaque
+  objects. With F3 most of them now decode, so fewer reach F9's recovery path; both are covered by
+  `tests/issue134.rs` and `tests/hardening_f3_decode.rs`.
+- **F1** (T37) boxes the `ParsedEntry` table variants and edits the same `OBJ_VPENT_HDR` arm of
+  `dwg_document_builder.rs`. The merged form (spike lessons §3.1) that T37 applies is:
+
+      OBJ_VPENT_HDR => {
+          let data =
+              tables::read_vx_table_record(&mut reader, self.obj_reader.version());
+          Some(ParsedEntry::Vx(obj_handle, Box::new(data)))
+      }
+
+- Upstream issues to file (not done here; no remote is used): the compound-object-id payload (#135)
+  and the R2007+ VX flags.

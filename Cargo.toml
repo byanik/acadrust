@@ -559,6 +559,11 @@ name = "hardening_f9_sweep"
 path = "tests/hardening_f9_sweep.rs"
 required-features = ["writers"]
 
+[[test]]
+name = "hardening_f3_decode"
+path = "tests/hardening_f3_decode.rs"
+required-features = ["writers"]
+
 [dependencies.anyhow]
 version = "1.0"
 

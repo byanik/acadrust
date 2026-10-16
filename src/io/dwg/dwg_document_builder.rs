@@ -1023,7 +1023,8 @@ impl DwgDocumentBuilder {
                             Some(ParsedEntry::VxControl(data.entry_handles))
                         }
                         OBJ_VPENT_HDR => {
-                            let data = tables::read_vx_table_record(&mut reader);
+                            let data =
+                                tables::read_vx_table_record(&mut reader, self.obj_reader.version());
                             Some(ParsedEntry::Vx(obj_handle, data))
                         }
                         _ => None,

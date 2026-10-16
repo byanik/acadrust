@@ -144,6 +144,9 @@ fn read_dependency(reader: &mut DwgMergedReader) -> AssocDependency {
     let dependent_on = handle(reader);
     let has_name = reader.read_bit();
     let name = has_name.then(|| reader.read_variable_text());
+    if let Some(class_name) = name.as_deref() {
+        skip_compound_object_id_payload(reader, class_name);
+    }
     AssocDependency {
         class_version,
         status,
@@ -158,6 +161,79 @@ fn read_dependency(reader: &mut DwgMergedReader) -> AssocDependency {
         node: handle(reader),
         dependency_body: handle(reader),
         dependency_body_id: reader.read_bit_long(),
+    }
+}
+
+/// This fork (F3): a dependency named after a compound-object-id class
+/// stores that class's payload before its remaining fields. For
+/// `AcDbImpBlockRefPathObjectId` the payload is BS version (always 0), BL path
+/// length, then per path element an RS tag (0x0001 in every traced record)
+/// and a handle. Upstream skipped it, so every later field was misread.
+/// Provenance: the fork's own bit traces, see PROVENANCE.md (F3).
+fn skip_compound_object_id_payload(reader: &mut DwgMergedReader, class_name: &str) {
+    if class_name != "AcDbImpBlockRefPathObjectId" {
+        return;
+    }
+    let _version = reader.read_bit_short();
+    let length = safe_count(reader.read_bit_long(), reader);
+    for _ in 0..length {
+        let _tag = reader.read_raw_short();
+        let _element = handle(reader);
+    }
+}
+
+/// This fork (F3): persistent sub-entity id of an ASSOCGEOMDEPENDENCY.
+/// R2013+ stores a flag and a numeric class code; R2007–R2010 store the class
+/// name as text. Code 1 has no fields, code 2 is BS, BL, BL, B and code 3 is
+/// BS, BL, BL; unknown codes keep upstream's greedy BL loop. The compound-object
+/// bit ends the record. Provenance: the fork's own bit traces, see PROVENANCE.md (F3).
+fn read_persistent_subent_id(
+    reader: &mut DwgMergedReader,
+    dxf_version: DxfVersion,
+) -> AssocPersistentSubentId {
+    let (leading_flag, class_code, text_name) = if dxf_version >= DxfVersion::AC1027 {
+        let leading_flag = reader.read_bit();
+        (leading_flag, reader.read_bit_long(), None)
+    } else {
+        let class_name = reader.read_variable_text();
+        let class_code = if class_name == "AcDbAssocEdgePersSubentId" {
+            3
+        } else {
+            -1
+        };
+        (false, class_code, Some(class_name))
+    };
+    let mut values = Vec::new();
+    match class_code {
+        1 => {}
+        2 => {
+            values.push(i32::from(reader.read_bit_short()));
+            values.push(reader.read_bit_long());
+            values.push(reader.read_bit_long());
+            values.push(i32::from(reader.read_bit()));
+        }
+        3 => {
+            values.push(i32::from(reader.read_bit_short()));
+            values.push(reader.read_bit_long());
+            values.push(reader.read_bit_long());
+        }
+        _ => {
+            while reader.main_remaining_bits() > 1 && values.len() < 64 {
+                values.push(reader.read_bit_long());
+            }
+        }
+    }
+    let class_name = text_name.unwrap_or_else(|| {
+        AssocPersistentSubentId::class_name_for_code(class_code)
+            .unwrap_or_default()
+            .to_string()
+    });
+    AssocPersistentSubentId {
+        class_name,
+        dependent_on_compound_object: reader.read_bit(),
+        class_code,
+        values,
+        leading_flag,
     }
 }
 
@@ -1004,25 +1080,7 @@ pub fn read_associative_data(
                 dependency,
                 class_version: reader.read_bit_short(),
                 enabled: reader.read_bit(),
-                persistent_subent: {
-                    // Flag, class code, the class's fields, then the
-                    // compound-object bit, which ends the record.
-                    let leading_flag = reader.read_bit();
-                    let class_code = reader.read_bit_long();
-                    let mut values = Vec::new();
-                    while reader.main_remaining_bits() > 1 && values.len() < 64 {
-                        values.push(reader.read_bit_long());
-                    }
-                    AssocPersistentSubentId {
-                        class_name: AssocPersistentSubentId::class_name_for_code(class_code)
-                            .unwrap_or_default()
-                            .to_string(),
-                        dependent_on_compound_object: reader.read_bit(),
-                        class_code,
-                        values,
-                        leading_flag,
-                    }
-                },
+                persistent_subent: read_persistent_subent_id(reader, dxf_version),
             })
         }
         "ASSOCACTION" => AssociativeData::Action(read_action(reader)),

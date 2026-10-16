@@ -460,12 +460,20 @@ pub fn read_vx_control(reader: &mut DwgMergedReader) -> VxControlData {
     }
 }
 
-/// Read VX_TABLE_RECORD / VPENT_HDR (R13-R2000).
-pub fn read_vx_table_record(reader: &mut DwgMergedReader) -> VxTableRecordData {
+/// Read VX_TABLE_RECORD / VPENT_HDR.
+///
+/// This fork (F3): the xref flags use the same version-dependent layout
+/// as every other table record (`read_xref_table_flags`: R2007+ stores only
+/// the BS); upstream hard-coded the R13–R2000 `B + BS + B` form.
+pub fn read_vx_table_record(
+    reader: &mut DwgMergedReader,
+    version: DwgVersion,
+) -> VxTableRecordData {
     let name = reader.read_variable_text();
-    let is_xref_reference = reader.read_bit();
-    let is_xref_resolved = reader.read_bit_short() == 256;
-    let is_xref_dependent = reader.read_bit();
+    let xref = read_xref_table_flags(reader, version);
+    let is_xref_reference = xref.reference;
+    let is_xref_resolved = xref.resolved;
+    let is_xref_dependent = xref.dependent;
     let is_on = reader.read_bit();
     let xref_handle = reader.read_handle();
     let viewport = reader.read_handle();
