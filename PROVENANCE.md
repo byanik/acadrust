@@ -48,3 +48,4 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 
 | ID | Commit | Files | Origin | Test |
 |---|---|---|---|---|
+| H6 | acadrust(H6): AllocBudget, bounded allocation helpers, DxfError limits | src/io/limits.rs; src/io/mod.rs; src/error.rs; src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_common/mod.rs; tests/hardening_limits.rs | This fork (original work) | tests/hardening_limits.rs; src/io/limits.rs::hardening_tests |

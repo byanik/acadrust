@@ -81,6 +81,34 @@ pub enum DxfError {
     /// Generic error with custom message
     #[error("{0}")]
     Custom(String),
+
+    /// Reading stopped because the caller's cancel token fired (this fork).
+    #[error("Read cancelled")]
+    Cancelled,
+
+    /// A reservation was refused by the caller's byte budget or by the
+    /// allocator (this fork).
+    #[error("Allocation budget exceeded: {what} requested {requested} bytes")]
+    BudgetExceeded {
+        what: &'static str,
+        requested: u64,
+    },
+
+    /// A size read from the file is above its format limit (this fork).
+    #[error("Limit exceeded: {what} is {value}, limit {limit}")]
+    LimitExceeded {
+        what: &'static str,
+        value: u64,
+        limit: u64,
+    },
+}
+
+impl DxfError {
+    /// `true` for errors that stop a read even in failsafe mode: the caller's
+    /// cancellation and byte budget are not file corruption (this fork).
+    pub fn is_resource_stop(&self) -> bool {
+        matches!(self, DxfError::Cancelled | DxfError::BudgetExceeded { .. })
+    }
 }
 
 /// Result type alias for acadrust operations

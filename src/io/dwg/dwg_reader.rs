@@ -272,18 +272,28 @@ pub struct DwgPageCrcInfo {
 pub struct DwgReadOptions {
     /// When `true`, recover as much data as possible from corrupt files.
     pub failsafe: bool,
+    /// This fork: byte budget asked before every large reservation whose
+    /// size comes from the file. `None` keeps only the format limits.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub budget: Option<crate::io::limits::AllocBudget>,
 }
 
 impl Default for DwgReadOptions {
     fn default() -> Self {
-        Self { failsafe: false }
+        Self {
+            failsafe: false,
+            budget: None,
+        }
     }
 }
 
 impl DwgReadOptions {
     /// Create options with failsafe mode enabled.
     pub fn failsafe() -> Self {
-        Self { failsafe: true }
+        Self {
+            failsafe: true,
+            ..Self::default()
+        }
     }
 }
 

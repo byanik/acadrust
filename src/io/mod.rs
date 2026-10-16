@@ -10,6 +10,7 @@
 
 pub mod dwg;
 pub mod dxf;
+pub mod limits;
 mod loft_parameters;
 mod loft_surface_curves;
 pub mod read;
