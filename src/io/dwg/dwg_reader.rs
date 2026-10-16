@@ -141,12 +141,12 @@ fn decode_ac21_page(
     block_size: usize,
     compressed_size: u64,
     uncompressed_size: u64,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, DxfError> {
     let mut compressed_data = vec![0u8; total_size];
     reed_solomon_decode(encoded, &mut compressed_data, factor, block_size);
     if compressed_size == uncompressed_size {
         compressed_data.truncate(uncompressed_size as usize);
-        return compressed_data;
+        return Ok(compressed_data);
     }
 
     let mut padded_source = vec![0u8; compressed_data.len() + 64];
@@ -157,9 +157,38 @@ fn decode_ac21_page(
         0,
         compressed_size as u32,
         &mut decompressed_data,
-    );
+    )?;
     decompressed_data.truncate(uncompressed_size as usize);
-    decompressed_data
+    Ok(decompressed_data)
+}
+
+/// Extract the 0x110-byte AC1021 compressed metadata from the Reed-Solomon
+/// decoded file header (this fork, patch H1). `compr_len < 0` means the
+/// metadata is stored raw; `compr_len` comes from the file and is checked.
+pub(crate) fn decode_ac21_metadata(decoded: &[u8], compr_len: i32) -> Result<[u8; 0x110], DxfError> {
+    const SRC_START: usize = 32; // offset 0x20 in the decoded header
+    let mut metadata = [0u8; 0x110];
+    let magnitude = compr_len.checked_abs().ok_or_else(|| {
+        DxfError::InvalidFormat("AC1021 header: ComprLen is i32::MIN".into())
+    })? as usize;
+    if magnitude > decoded.len() {
+        return Err(DxfError::InvalidFormat(format!(
+            "AC1021 header: ComprLen {compr_len} exceeds the {}-byte decoded header",
+            decoded.len()
+        )));
+    }
+    if compr_len < 0 {
+        // Negative ComprLen means data is stored uncompressed (raw).
+        // |ComprLen| = raw data length. Copy directly from offset 0x20.
+        let copy_len = magnitude
+            .min(0x110)
+            .min(decoded.len().saturating_sub(SRC_START));
+        metadata[..copy_len].copy_from_slice(&decoded[SRC_START..SRC_START + copy_len]);
+    } else {
+        // Positive ComprLen means data is LZ77 compressed.
+        decompress_ac21(decoded, SRC_START as u32, compr_len as u32, &mut metadata)?;
+    }
+    Ok(metadata)
 }
 
 /// Results from reading a DWG file header.
@@ -2052,23 +2081,7 @@ impl<R: Read + Seek> DwgReader<R> {
         );
 
         // Step 4: Extract 0x110-byte metadata
-        let mut metadata_buffer = vec![0u8; 0x110];
-
-        if compr_len < 0 {
-            // Negative ComprLen means data is stored uncompressed (raw).
-            // |ComprLen| = raw data length. Copy directly from offset 0x20.
-            let raw_len = (-compr_len) as usize;
-            let src_start = 32; // offset 0x20 in decoded data
-            let copy_len = raw_len
-                .min(0x110)
-                .min(decoded_data.len().saturating_sub(src_start));
-            metadata_buffer[..copy_len]
-                .copy_from_slice(&decoded_data[src_start..src_start + copy_len]);
-        } else {
-            // Positive ComprLen means data is LZ77 compressed.
-            // Decompress from byte offset 32 in decoded_data.
-            decompress_ac21(&decoded_data, 32, compr_len as u32, &mut metadata_buffer);
-        }
+        let metadata_buffer = decode_ac21_metadata(&decoded_data, compr_len)?;
 
         // Step 5: Parse compressed metadata (extracts CRC-64)
         let metadata = Dwg21CompressedMetadata::from_bytes(&metadata_buffer)?;
@@ -2339,14 +2352,14 @@ impl<R: Read + Seek> DwgReader<R> {
             encoded_buffer[bytes_read..].fill(0);
         }
 
-        Ok(decode_ac21_page(
+        decode_ac21_page(
             &encoded_buffer,
             total_size,
             factor,
             block_size,
             compressed_size,
             uncompressed_size,
-        ))
+        )
     }
 
     /// Get the merged decompressed buffer for a named section (AC21).
@@ -2543,14 +2556,15 @@ impl<R: Read + Seek> DwgReader<R> {
                         factor,
                         compressed_size,
                         uncompressed_size,
-                    } => Ok(decode_ac21_page(
+                    } => decode_ac21_page(
                         &bytes,
                         total_size,
                         factor,
                         block_size,
                         compressed_size,
                         uncompressed_size,
-                    )),
+                    )
+                    .map_err(|error| error.to_string()),
                     PagePayload::Failed(error) => Err(error),
                 };
                 (page.number, page.fill_size, data)
@@ -2559,6 +2573,12 @@ impl<R: Read + Seek> DwgReader<R> {
             for (page_number, fill_size, page_result) in decoded {
                 match page_result {
                     Ok(page_data) => result.extend_from_slice(&page_data),
+                    Err(error) if !failsafe => {
+                        return Err(DxfError::Compression(format!(
+                            "page {} in section '{}': {}",
+                            page_number, section_name, error
+                        )))
+                    }
                     Err(error) => {
                         skipped_pages += 1;
                         self.notifications.notify(
@@ -3219,5 +3239,32 @@ pub(crate) fn recover_mtext_bg_roundtrip(document: &mut crate::document::CadDocu
             m.background_color = color;
             m.background_transparency = transp;
         }
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[test]
+    fn ac21_metadata_rejects_impossible_compressed_lengths() {
+        let decoded = [0u8; 3 * 239];
+        for compr_len in [i32::MIN, i32::MAX, 0x7FFF_FFFF, -718, 718] {
+            let result = std::panic::catch_unwind(|| decode_ac21_metadata(&decoded, compr_len));
+            assert!(
+                matches!(result, Ok(Err(_))),
+                "compr_len {compr_len}: expected an error without panicking"
+            );
+        }
+    }
+
+    #[test]
+    fn ac21_metadata_copies_the_raw_form() {
+        let mut decoded = [0u8; 3 * 239];
+        for (i, byte) in decoded[32..32 + 0x110].iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        let metadata = decode_ac21_metadata(&decoded, -0x110).unwrap();
+        assert_eq!(&metadata[..], &decoded[32..32 + 0x110]);
     }
 }

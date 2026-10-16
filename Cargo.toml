@@ -419,6 +419,10 @@ path = "tests/xref_linetype_localization.rs"
 name = "hardening_limits"
 path = "tests/hardening_limits.rs"
 
+[[test]]
+name = "hardening_h1_ac21"
+path = "tests/hardening_h1_ac21.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 
