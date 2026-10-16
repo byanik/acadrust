@@ -17,6 +17,13 @@ use crate::tables::*;
 use crate::types::*;
 use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 
+/// This fork (H4): the most elements a DXF count may pre-reserve; lists
+/// grow with the data actually read, never with an untrusted count.
+const DXF_COUNT_RESERVE_CAP: usize = 1024;
+/// This fork (H4): upstream's own clamp for DXF list counts (see the HATCH
+/// pattern-boundary reader below).
+const DXF_MAX_LIST_COUNT: i32 = 100_000;
+
 /// Build a [`Matrix4`] from 12 doubles holding a 4×3 transform in DXF
 fn matrix_from_column_major(v: &[f64]) -> Matrix4 {
     Matrix4 {
@@ -223,7 +230,7 @@ fn read_dgn_stroke_pattern_dxf(
     let phase = dgn_f64(take_dgn_property(properties, subclass, 42), 0.0);
     let phase_mode =
         DgnLsPhaseMode::from_code(dgn_i32(take_dgn_property(properties, subclass, 281), 0) as u8);
-    let count = dgn_i32(take_dgn_property(properties, subclass, 93), 0).max(0) as usize;
+    let count = dgn_i32(take_dgn_property(properties, subclass, 93), 0).clamp(0, DXF_MAX_LIST_COUNT) as usize;
     let mut dash = take_all_dgn_properties(properties, subclass, 292);
     let mut bypass = take_all_dgn_properties(properties, subclass, 293);
     let mut scalable = take_all_dgn_properties(properties, subclass, 294);
@@ -234,7 +241,7 @@ fn read_dgn_stroke_pattern_dxf(
     let mut end_widths = take_all_dgn_properties(properties, subclass, 45);
     let mut width_modes = take_all_dgn_properties(properties, subclass, 94);
     let mut cap_modes = take_all_dgn_properties(properties, subclass, 95);
-    let mut strokes = Vec::with_capacity(count);
+    let mut strokes = Vec::with_capacity(count.min(DXF_COUNT_RESERVE_CAP));
     for _ in 0..count {
         strokes.push(DgnLsStroke {
             is_dash: dgn_bool(take_first(&mut dash)),
@@ -9311,7 +9318,11 @@ impl<'a> SectionReader<'a> {
                 }
                 73 => {
                     if let Some(count) = pair.as_i16() {
-                        linetype.elements.reserve(count as usize);
+                        // This fork (H4): a negative i16 must not become a
+                        // huge reservation.
+                        linetype
+                            .elements
+                            .reserve((count.max(0) as usize).min(DXF_COUNT_RESERVE_CAP));
                     }
                 }
                 40 => {
@@ -11719,7 +11730,7 @@ impl<'a> SectionReader<'a> {
             )),
             DgnLsComponentType::Point => {
                 let count = dgn_i32(take_dgn_property(&mut object.properties, subclass, 93), 0)
-                    .max(0) as usize;
+                    .clamp(0, DXF_MAX_LIST_COUNT) as usize;
                 let stroke_component =
                     dgn_handle(take_dgn_property(&mut object.properties, subclass, 340));
                 let mut symbol_handles =
@@ -11739,7 +11750,7 @@ impl<'a> SectionReader<'a> {
                 let mut angles = take_all_dgn_properties(&mut object.properties, subclass, 43);
                 let mut stroke_numbers =
                     take_all_dgn_properties(&mut object.properties, subclass, 96);
-                let mut symbols = Vec::with_capacity(count);
+                let mut symbols = Vec::with_capacity(count.min(DXF_COUNT_RESERVE_CAP));
                 for _ in 0..count {
                     symbols.push(DgnLsSymbolReference {
                         symbol_component: dgn_handle(take_first(&mut symbol_handles)),
@@ -15280,11 +15291,14 @@ impl<'a> SectionReader<'a> {
                     // Number of source boundary objects
                     let num_handles = pair.as_i32().unwrap_or(0);
                     for _ in 0..num_handles {
-                        if let Some(hp) = self.reader.read_pair()? {
-                            if hp.code == 330 {
-                                if let Some(h) = hp.as_handle() {
-                                    current_path_handles.push(Handle::new(h));
-                                }
+                        // This fork (H4): stop at the end of the stream
+                        // instead of spinning through an untrusted count.
+                        let Some(hp) = self.reader.read_pair()? else {
+                            break;
+                        };
+                        if hp.code == 330 {
+                            if let Some(h) = hp.as_handle() {
+                                current_path_handles.push(Handle::new(h));
                             }
                         }
                     }
@@ -15695,24 +15709,28 @@ impl<'a> SectionReader<'a> {
             }
         }
 
+        // This fork (H4): group 93 is untrusted. A negative count reads no
+        // vertex, the reservation is capped, and the loop stops at the first
+        // pair that is not a vertex or at the end of the stream, so at most the
+        // vertices actually present are stored.
+        let count = num_vertices.max(0);
         let mut edge = crate::entities::hatch::PolylineEdge {
-            vertices: Vec::with_capacity(num_vertices as usize),
+            vertices: Vec::with_capacity((count as usize).min(DXF_COUNT_RESERVE_CAP)),
             is_closed,
         };
 
         // Read vertices: 10/20 (coords), optional 42 (bulge)
-        for _ in 0..num_vertices {
-            let mut x = 0.0;
+        for _ in 0..count {
+            let x = match self.reader.read_pair()? {
+                Some(p) if p.code == 10 => p.as_double().unwrap_or(0.0),
+                Some(p) => {
+                    self.reader.push_back(p);
+                    break;
+                }
+                None => break,
+            };
             let mut y = 0.0;
             let mut bulge = 0.0;
-            if let Some(p) = self.reader.read_pair()? {
-                if p.code == 10 {
-                    x = p.as_double().unwrap_or(0.0);
-                } else {
-                    self.reader.push_back(p);
-                    continue;
-                }
-            }
             if let Some(p) = self.reader.read_pair()? {
                 if p.code == 20 {
                     y = p.as_double().unwrap_or(0.0);

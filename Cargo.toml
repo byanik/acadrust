@@ -439,6 +439,10 @@ path = "tests/hardening_h5_overread.rs"
 name = "hardening_c1_cancel"
 path = "tests/hardening_c1_cancel.rs"
 
+[[test]]
+name = "hardening_h4_dxf"
+path = "tests/hardening_h4_dxf.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 
