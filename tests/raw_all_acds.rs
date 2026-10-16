@@ -61,7 +61,11 @@ fn source_document(version: DxfVersion) -> CadDocument {
 }
 
 fn read(bytes: Vec<u8>) -> CadDocument {
-    DwgReader::from_stream(Cursor::new(bytes)).read().unwrap()
+    // This fork (F12): the reader no longer reads ACADRUST_RAW_ALL; the
+    // test forwards it explicitly.
+    let mut reader = DwgReader::from_stream(Cursor::new(bytes));
+    reader.set_capture_raw_records(std::env::var_os("ACADRUST_RAW_ALL").is_some());
+    reader.read().unwrap()
 }
 
 fn geometry(document: &CadDocument) -> Vec<(u64, Vec<u8>)> {

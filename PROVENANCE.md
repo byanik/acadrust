@@ -57,6 +57,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | H4 | acadrust(H4): clamp DXF HATCH 93, LTYPE 73 and DGN counts | src/io/dxf/reader/section_reader.rs; Cargo.toml; tests/hardening_h4_dxf.rs; tests/hardening/h4_*.dxf | This fork (original work); clamp pattern from upstream (HATCH pattern-boundary reader) | tests/hardening_h4_dxf.rs |
 | F17 | acadrust(F17): per-entity DXF failsafe; linear block membership | src/document.rs; src/tables/mod.rs; src/io/dxf/reader.rs; src/io/dxf/reader/section_reader.rs; src/io/dxf/reader/text_reader.rs; Cargo.toml; tests/hardening_f17_dxf.rs | This fork (original work) | tests/hardening_f17_dxf.rs (complexity test: --release --ignored); src/document.rs::hardening_f17_tests; src/io/dxf/reader/section_reader.rs::hardening_f17_tests |
 | F11 | acadrust(F11): provenance inventory of LibreDWG-citing files | PROVENANCE.md | This fork (inventory; no code change) | `git grep` command in "LibreDWG-citing files (F11 inventory)" |
+| F12 | acadrust(F12): remove from_mmap; drop PERF and ACADRUST_RAW_ALL env reads | src/io/dwg/dwg_reader.rs; src/io/dwg/dwg_document_builder.rs; src/document.rs; Cargo.toml; tests/raw_all_acds.rs; tests/raw_all_compound.rs; tests/raw_all_exclusions.rs; tests/hardening_surface.rs | This fork (original work); raw-record capture kept behind DwgReader::set_capture_raw_records (off by default) | tests/hardening_surface.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
 
 ## Limits (H2, H3)
 

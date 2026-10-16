@@ -38,7 +38,11 @@ impl Drop for RawEnvironment {
 
 fn roundtrip(document: &CadDocument) -> CadDocument {
     let bytes = DwgWriter::write_to_vec(document).unwrap();
-    DwgReader::from_stream(Cursor::new(bytes)).read().unwrap()
+    // This fork (F12): the reader no longer reads ACADRUST_RAW_ALL; the
+    // test forwards it explicitly.
+    let mut reader = DwgReader::from_stream(Cursor::new(bytes));
+    reader.set_capture_raw_records(std::env::var_os("ACADRUST_RAW_ALL").is_some());
+    reader.read().unwrap()
 }
 
 fn assert_markers(

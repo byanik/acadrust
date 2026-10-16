@@ -278,7 +278,7 @@ struct Pass2Chunk {
     pending: PendingPolylines,
     pending_attributes: HashMap<u64, Vec<AttributeEntity>>,
     failures: Vec<RecordFailure>,
-    /// (handle, type code, merged bytes, handle bits) — only with ACADRUST_RAW_ALL.
+    /// (handle, type code, merged bytes, handle bits) — only with `capture_raw`.
     raw_records: Vec<(u64, i16, Vec<u8>, i64)>,
 }
 
@@ -449,6 +449,8 @@ pub struct DwgDocumentBuilder {
     /// Polled every 1,024 catalog records of pass 1, before every pass-2
     /// batch and once before the post-passes.
     cancel: Option<crate::io::limits::CancelToken>,
+    /// Keep verbatim records (this fork, F12: was `ACADRUST_RAW_ALL`).
+    capture_raw: bool,
 }
 
 fn accept_loaded_entity(
@@ -481,6 +483,7 @@ impl DwgDocumentBuilder {
             notifications: NotificationCollection::new(),
             progress: None,
             cancel: None,
+            capture_raw: false,
         }
     }
 
@@ -494,6 +497,11 @@ impl DwgDocumentBuilder {
 
     pub fn set_progress_callback(&mut self, progress: std::sync::Arc<dyn Fn(u16) + Send + Sync>) {
         self.progress = Some(progress);
+    }
+
+    /// Keep every object's verbatim record (this fork, F12).
+    pub fn set_capture_raw_records(&mut self, capture: bool) {
+        self.capture_raw = capture;
     }
 
     /// Stop building once `cancel` fires (this fork, patch C1).
@@ -621,7 +629,8 @@ impl DwgDocumentBuilder {
         document: &mut CadDocument,
         mut visit: Option<&mut dyn FnMut(&CadDocument, EntityType) -> Option<EntityType>>,
     ) -> DwgBuildOutcome {
-        let perf = std::env::var_os("PERF").is_some();
+        // This fork (F12): no environment-controlled timing output.
+        let perf = false;
         let build_started = web_time::Instant::now();
         document
             .vx_table
@@ -767,7 +776,7 @@ impl DwgDocumentBuilder {
         }
         self.report_progress(110);
         let pass1_started = web_time::Instant::now();
-        let capture_raw_pass1 = std::env::var_os("ACADRUST_RAW_ALL").is_some();
+        let capture_raw_pass1 = self.capture_raw;
 
         for (index, &(handle, offset, _, type_code)) in record_catalog.iter().enumerate() {
             if index % 1024 == 0 && self.is_cancelled() {
@@ -1789,7 +1798,7 @@ impl DwgDocumentBuilder {
 
         let pass2_total = pass2_records.len().max(1);
         let mut pass2_done = 0usize;
-        let capture_raw = std::env::var_os("ACADRUST_RAW_ALL").is_some();
+        let capture_raw = self.capture_raw;
         for batch in pass2_records.chunks(batch_size) {
             if self.is_cancelled() {
                 return self.cancelled_outcome(diagnostics);

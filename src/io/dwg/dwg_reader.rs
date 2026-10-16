@@ -965,6 +965,9 @@ pub struct DwgReader<R: Read + Seek> {
     /// Pages replaced by zeros in failsafe mode (this fork, patch H5);
     /// moved into `ReadStats::diagnostics` by the read.
     page_diagnostics: Vec<ReadDiagnostic>,
+    /// Keep verbatim object records for raw DWG passthrough (this fork,
+    /// F12: replaces the `ACADRUST_RAW_ALL` environment variable).
+    capture_raw: bool,
 }
 
 impl DwgReader<File> {
@@ -987,27 +990,7 @@ impl DwgReader<File> {
             source_path: Some(path.to_string_lossy().into_owned()),
             progress: None,
             page_diagnostics: Vec::new(),
-        })
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl DwgReader<Cursor<memmap2::Mmap>> {
-    /// Open through a read-only memory map. Section seeks then become pointer
-    /// moves and the OS can page/readahead the file without repeated syscalls.
-    pub fn from_mmap<P: AsRef<Path>>(path: P) -> Result<Self, DxfError> {
-        let path = path.as_ref();
-        let file = File::open(path)?;
-        // SAFETY: read-only map owns its file-backed virtual-memory mapping;
-        // this reader never mutates the file while the mapping is alive.
-        let map = unsafe { memmap2::MmapOptions::new().map(&file)? };
-        Ok(Self {
-            stream: Cursor::new(map),
-            options: DwgReadOptions::default(),
-            notifications: NotificationCollection::new(),
-            source_path: Some(path.to_string_lossy().into_owned()),
-            progress: None,
-            page_diagnostics: Vec::new(),
+            capture_raw: false,
         })
     }
 }
@@ -1022,6 +1005,7 @@ impl<R: Read + Seek> DwgReader<R> {
             source_path: None,
             progress: None,
             page_diagnostics: Vec::new(),
+            capture_raw: false,
         }
     }
 
@@ -1034,7 +1018,14 @@ impl<R: Read + Seek> DwgReader<R> {
             source_path: None,
             progress: None,
             page_diagnostics: Vec::new(),
+            capture_raw: false,
         }
+    }
+
+    /// Keep every object's verbatim record for same-version DWG passthrough
+    /// writes (this fork, F12). Off by default; it costs memory.
+    pub fn set_capture_raw_records(&mut self, capture: bool) {
+        self.capture_raw = capture;
     }
 
     /// `Err(Cancelled)` once the caller's token has fired (this fork, C1).
@@ -1170,7 +1161,9 @@ impl<R: Read + Seek> DwgReader<R> {
         >,
     ) -> std::result::Result<crate::io::read::ReadOutcome, DxfError> {
         let failsafe = self.options.failsafe;
-        let perf = std::env::var_os("PERF").is_some();
+        // This fork (F12): timing output is never switched on from the
+        // environment.
+        let perf = false;
         let total_started = web_time::Instant::now();
         let mut diagnostics = Vec::new();
         // Page events of an earlier standalone section read are not this read's.
@@ -1433,6 +1426,7 @@ impl<R: Read + Seek> DwgReader<R> {
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);
                         builder.set_failsafe(failsafe);
                         builder.set_cancel(self.options.cancel.clone());
+                        builder.set_capture_raw_records(self.capture_raw);
                         if let Some(progress) = &self.progress {
                             builder.set_progress_callback(progress.clone());
                         }
@@ -2564,7 +2558,8 @@ impl<R: Read + Seek> DwgReader<R> {
         info: &DwgFileHeaderInfo,
     ) -> Result<Vec<u8>, DxfError> {
         let failsafe = self.options.failsafe;
-        let perf = std::env::var_os("PERF").is_some();
+        // This fork (F12): no environment-controlled timing output.
+        let perf = false;
         let started = web_time::Instant::now();
 
         // ── AC15 path: direct read from section locators ──
@@ -3613,6 +3608,53 @@ mod hardening_tests {
             "{result:?}"
         );
         assert_eq!(*asked.lock().unwrap(), vec![251, 80]);
+    }
+
+    #[test]
+    fn raw_record_capture_follows_the_reader_switch() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/anonymous-names.dwg");
+        let read = |capture: bool| {
+            let mut reader = DwgReader::from_file(path).unwrap();
+            reader.set_capture_raw_records(capture);
+            reader.read_with_stats().unwrap()
+        };
+        let off = read(false);
+        assert!(off.document.raw_records.is_empty());
+        // Table records (pass 1) and every other record (pass 2) are kept: one
+        // verbatim copy per source record, losing neither pass.
+        let on = read(true);
+        assert!(on.stats.source_records > 0);
+        assert_eq!(on.document.raw_records.len(), on.stats.source_records);
+        assert_eq!(on.stats.skipped_source_records, 0);
+    }
+
+    /// The upstream switch is gone: a child process started with
+    /// `ACADRUST_RAW_ALL` set still reads without keeping raw records.
+    ///
+    /// The child is told apart by a second, never-matching test filter on its
+    /// command line, so no environment variable is read in `src/` (the F12
+    /// surface test scans every file for those reads).
+    #[test]
+    fn the_raw_all_environment_variable_no_longer_enables_capture() {
+        const CHILD_MARKER: &str = "hardening-raw-env-child";
+        const NAME: &str =
+            "io::dwg::dwg_reader::hardening_tests::the_raw_all_environment_variable_no_longer_enables_capture";
+        if std::env::args().any(|argument| argument == CHILD_MARKER) {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/anonymous-names.dwg");
+            let document = DwgReader::from_file(path).unwrap().read().unwrap();
+            assert!(document.raw_records.is_empty());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, CHILD_MARKER, "--test-threads=1"])
+            .env("ACADRUST_RAW_ALL", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        // A mistyped test name would run nothing and still succeed.
+        assert!(stdout.contains("1 passed"), "{stdout}");
     }
 
     #[test]

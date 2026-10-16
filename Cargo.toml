@@ -447,6 +447,10 @@ path = "tests/hardening_h4_dxf.rs"
 name = "hardening_f17_dxf"
 path = "tests/hardening_f17_dxf.rs"
 
+[[test]]
+name = "hardening_surface"
+path = "tests/hardening_surface.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 
@@ -509,9 +513,6 @@ version = "1.4"
 
 [dev-dependencies.serde_json]
 version = "1"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.memmap2]
-version = "0.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
 version = "1"

@@ -1297,10 +1297,11 @@ pub struct CadDocument {
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) raw_acds_data: Option<Arc<Vec<u8>>>,
     /// Debug aid: every record of the source DWG, verbatim, keyed by handle
-    /// (type code, bytes). Only filled when `ACADRUST_RAW_ALL` is set in the
-    /// environment; the writer then re-emits these instead of re-serialising
-    /// so that a writer defect can be bisected by object type
-    /// (`ACADRUST_RAW_EXCLUDE`).
+    /// (type code, bytes). Only filled when the reader was asked to keep them
+    /// (`DwgReader::set_capture_raw_records`; this fork, F12: upstream read
+    /// the `ACADRUST_RAW_ALL` environment variable). With `ACADRUST_RAW_ALL`
+    /// set, the writer re-emits these instead of re-serialising so that a
+    /// writer defect can be bisected by object type (`ACADRUST_RAW_EXCLUDE`).
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) raw_records: HashMap<u64, (i16, Arc<crate::entities::RawRecord>)>,
     #[cfg_attr(feature = "serde", serde(skip))]
