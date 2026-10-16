@@ -1,0 +1,20 @@
+acadrust (hardened fork)
+========================
+
+This directory contains acadrust 0.6.4 (https://github.com/hakanaktt/acadrust,
+upstream commit 8d5c46d423941ad96575760bf77979f8c46156fb), Copyright (c) Hakan AK,
+licensed under the Mozilla Public License, v. 2.0 (see LICENSE).
+
+Modified in this fork. Each modification is a separate commit that touches only this
+directory and is listed in PROVENANCE.md. Modified files remain under the MPL-2.0, and
+the source of this fork is published before any binary that contains it is distributed.
+
+Third-party material carried over unchanged from upstream:
+- tests/fixtures/dynamic-blocks/*.dwg: from ACadSharp (https://github.com/DomCR/ACadSharp),
+  Copyright (c) 2021 Albert Domenech, MIT License (tests/fixtures/dynamic-blocks/LICENSE).
+- Parts of the DWG reader and writer follow ACadSharp's structure and naming
+  (for example "Port of DwgStreamReaderBase.ReadByte" in
+  src/io/dwg/dwg_stream_readers/bit_reader.rs); ACadSharp is MIT-licensed.
+
+The ODA document "OpenDesign Specification for .dwg files" that the crates.io package
+ships under src/docs/ is not part of this fork (see PROVENANCE.md).
