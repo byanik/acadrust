@@ -42,7 +42,7 @@ use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::parallel::{map_ordered, worker_count};
 use crate::io::dwg::reed_solomon::reed_solomon_decode;
 use crate::io::limits::{
-    reserve_vec, section_cap, zeroed_vec, AllocBudget, AC21_MAX_PAGE_BUFFER,
+    check_cancel, reserve_vec, section_cap, zeroed_vec, AllocBudget, AC21_MAX_PAGE_BUFFER,
 };
 use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage, SourceFormat};
 use crate::notification::{NotificationCollection, NotificationType};
@@ -397,6 +397,11 @@ pub struct DwgReadOptions {
     /// size comes from the file. `None` keeps only the format limits.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub budget: Option<crate::io::limits::AllocBudget>,
+    /// This fork: polled at stage, page and record-batch boundaries; a
+    /// fired token ends the read with `DxfError::Cancelled`, never with a
+    /// partial document.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub cancel: Option<crate::io::limits::CancelToken>,
 }
 
 impl Default for DwgReadOptions {
@@ -404,6 +409,7 @@ impl Default for DwgReadOptions {
         Self {
             failsafe: false,
             budget: None,
+            cancel: None,
         }
     }
 }
@@ -1031,6 +1037,11 @@ impl<R: Read + Seek> DwgReader<R> {
         }
     }
 
+    /// `Err(Cancelled)` once the caller's token has fired (this fork, C1).
+    fn check_cancel(&self) -> Result<(), DxfError> {
+        check_cancel(self.options.cancel.as_ref())
+    }
+
     /// Record a page that failsafe mode replaced (wholly or partly) with zeros
     /// (this fork, patch H5).
     fn note_zero_filled_page(&mut self, section: Option<&str>, message: String) {
@@ -1165,6 +1176,7 @@ impl<R: Read + Seek> DwgReader<R> {
         // Page events of an earlier standalone section read are not this read's.
         self.page_diagnostics.clear();
         self.report_progress(0);
+        self.check_cancel()?;
 
         // AC1009/R12 predates the section-map/object-stream model used by the
         // normal DWG reader. Dispatch it to the byte-aligned pre-R13 codec
@@ -1257,6 +1269,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let dxf_version = crate::types::DxfVersion::parse(&info.version_string)
             .unwrap_or(crate::types::DxfVersion::Unknown);
         self.report_progress(20);
+        self.check_cancel()?;
         let mut document = crate::document::CadDocument::with_version(dxf_version);
         document.maintenance_version = info.acad_maintenance_version;
         document.dwg_source_version = Some(dxf_version);
@@ -1292,6 +1305,7 @@ impl<R: Read + Seek> DwgReader<R> {
             ),
         }
         self.report_progress(30);
+        self.check_cancel()?;
 
         // 3. Read Header Variables (AcDb:Header)
         match self.get_section_buffer("AcDb:Header", &info) {
@@ -1348,6 +1362,7 @@ impl<R: Read + Seek> DwgReader<R> {
             }
         }
         self.report_progress(40);
+        self.check_cancel()?;
 
         // 4. Read Handle Map (AcDb:Handles)
         let mut handles_section_read = false;
@@ -1394,6 +1409,7 @@ impl<R: Read + Seek> DwgReader<R> {
             }
         };
         self.report_progress(50);
+        self.check_cancel()?;
 
         // 5. Read Objects (AcDb:AcDbObjects) and build document
         let handle_count = handle_map.len();
@@ -1416,6 +1432,7 @@ impl<R: Read + Seek> DwgReader<R> {
                         record_stream_read = true;
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);
                         builder.set_failsafe(failsafe);
+                        builder.set_cancel(self.options.cancel.clone());
                         if let Some(progress) = &self.progress {
                             builder.set_progress_callback(progress.clone());
                         }
@@ -1423,6 +1440,9 @@ impl<R: Read + Seek> DwgReader<R> {
                             Some(visit) => builder.build_with_visitor_stats(&mut document, visit),
                             None => builder.build_with_stats(&mut document),
                         };
+                        if build_outcome.cancelled {
+                            return Err(DxfError::Cancelled);
+                        }
                         decoded_source_records = build_outcome.decoded_records;
                         skipped_source_records = build_outcome.skipped_records;
                         if !failsafe && skipped_source_records != 0 {
@@ -1455,6 +1475,7 @@ impl<R: Read + Seek> DwgReader<R> {
             }
         }
         self.report_progress(930);
+        self.check_cancel()?;
         if perf {
             eprintln!(
                 "[perf] dwg-read objects={:.1}ms handles={} entities={} objects={}",
@@ -1528,6 +1549,7 @@ impl<R: Read + Seek> DwgReader<R> {
             }
         }
         self.report_progress(970);
+        self.check_cancel()?;
 
         // 7. Preview / thumbnail image. Stored uncompressed at the raw file
         //    offset in the header's preview seeker (all versions), wrapped in a
@@ -2653,6 +2675,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let batch_pages = worker_count().saturating_mul(2);
         let mut skipped_pages = 0u32;
         for page_batch in section.pages.chunks(batch_pages) {
+            self.check_cancel()?;
             let mut prepared = Vec::with_capacity(page_batch.len());
             for page in page_batch {
                 if page.decompressed_size > AC21_MAX_PAGE_BUFFER as u64 {
@@ -2866,6 +2889,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let batch_pages = worker_count().saturating_mul(2);
 
         for page_batch in section.pages.chunks(batch_pages) {
+            self.check_cancel()?;
             let mut prepared = Vec::with_capacity(page_batch.len());
             for page in page_batch {
                 let page_number = page.page_number as i32;

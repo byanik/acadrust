@@ -317,6 +317,9 @@ pub struct DwgBuildOutcome {
     pub decoded_records: usize,
     pub skipped_records: usize,
     pub diagnostics: Vec<ReadDiagnostic>,
+    /// The cancel token fired; the document is incomplete and must be
+    /// discarded (this fork, patch C1).
+    pub cancelled: bool,
 }
 
 /// Handle-to-name resolution maps built from table entries.
@@ -443,6 +446,9 @@ pub struct DwgDocumentBuilder {
     /// Shared with `DwgReader`; reports the object-build portion of the
     /// reader's 0..=1000 progress range.
     progress: Option<std::sync::Arc<dyn Fn(u16) + Send + Sync>>,
+    /// Polled every 1,024 catalog records of pass 1, before every pass-2
+    /// batch and once before the post-passes.
+    cancel: Option<crate::io::limits::CancelToken>,
 }
 
 fn accept_loaded_entity(
@@ -474,6 +480,7 @@ impl DwgDocumentBuilder {
             failsafe: false,
             notifications: NotificationCollection::new(),
             progress: None,
+            cancel: None,
         }
     }
 
@@ -487,6 +494,25 @@ impl DwgDocumentBuilder {
 
     pub fn set_progress_callback(&mut self, progress: std::sync::Arc<dyn Fn(u16) + Send + Sync>) {
         self.progress = Some(progress);
+    }
+
+    /// Stop building once `cancel` fires (this fork, patch C1).
+    pub fn set_cancel(&mut self, cancel: Option<crate::io::limits::CancelToken>) {
+        self.cancel = cancel;
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|token| token.is_cancelled())
+    }
+
+    fn cancelled_outcome(self, diagnostics: Vec<ReadDiagnostic>) -> DwgBuildOutcome {
+        DwgBuildOutcome {
+            notifications: self.notifications,
+            decoded_records: 0,
+            skipped_records: 0,
+            diagnostics,
+            cancelled: true,
+        }
     }
 
     #[inline]
@@ -743,7 +769,10 @@ impl DwgDocumentBuilder {
         let pass1_started = web_time::Instant::now();
         let capture_raw_pass1 = std::env::var_os("ACADRUST_RAW_ALL").is_some();
 
-        for &(handle, offset, _, type_code) in &record_catalog {
+        for (index, &(handle, offset, _, type_code)) in record_catalog.iter().enumerate() {
+            if index % 1024 == 0 && self.is_cancelled() {
+                return self.cancelled_outcome(diagnostics);
+            }
             if is_table_type(type_code) {
                 let (_, mut reader) = match self.obj_reader.read_record_at(offset) {
                     Ok(record) => record,
@@ -1762,6 +1791,9 @@ impl DwgDocumentBuilder {
         let mut pass2_done = 0usize;
         let capture_raw = std::env::var_os("ACADRUST_RAW_ALL").is_some();
         for batch in pass2_records.chunks(batch_size) {
+            if self.is_cancelled() {
+                return self.cancelled_outcome(diagnostics);
+            }
             let decode_started = web_time::Instant::now();
             let chunks: Vec<Pass2Chunk> = map_chunks(batch, chunk_size, |records| {
                 let mut chunk = Pass2Chunk::new(
@@ -1982,6 +2014,9 @@ impl DwgDocumentBuilder {
         }
         let post_started = web_time::Instant::now();
         self.report_progress(875);
+        if self.is_cancelled() {
+            return self.cancelled_outcome(diagnostics);
+        }
 
         // ── Post-pass: Assemble polyline vertices and add to document ──
         for (poly_handle, mut entity) in pending.polylines {
@@ -3269,6 +3304,7 @@ impl DwgDocumentBuilder {
                 .saturating_add(skipped_pass1 as usize)
                 .saturating_add(skipped_pass2 as usize),
             diagnostics,
+            cancelled: false,
         }
     }
 

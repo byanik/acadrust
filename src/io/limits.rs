@@ -1,10 +1,12 @@
-//! This fork: byte budget and bounded allocation helpers (patch H6).
+//! This fork: byte budget and bounded allocation helpers (patch H6) and
+//! the cancellation token (patch C1).
 //!
 //! Every size that comes from an untrusted file goes through one of these
 //! helpers before memory is reserved. A size above its format limit is a
 //! [`DxfError::LimitExceeded`]; a size the caller's [`AllocBudget`] refuses,
 //! or one the allocator cannot reserve, is a [`DxfError::BudgetExceeded`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::error::DxfError;
@@ -29,6 +31,43 @@ impl AllocBudget {
 impl core::fmt::Debug for AllocBudget {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("AllocBudget(..)")
+    }
+}
+
+/// Caller-supplied cancellation check, polled at stage, page and record-batch
+/// boundaries. Once it returns `true` the read ends with
+/// [`DxfError::Cancelled`], even in failsafe mode.
+#[derive(Clone)]
+pub struct CancelToken(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl CancelToken {
+    /// Wrap a predicate that returns `true` once the read must stop.
+    pub fn new(f: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    /// Token that fires when `flag` becomes `true`.
+    pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
+        Self::new(move || flag.load(Ordering::Relaxed))
+    }
+
+    /// Ask whether the read must stop now.
+    pub fn is_cancelled(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl core::fmt::Debug for CancelToken {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CancelToken(..)")
+    }
+}
+
+/// `Err(Cancelled)` when the token has fired.
+pub(crate) fn check_cancel(token: Option<&CancelToken>) -> Result<(), DxfError> {
+    match token {
+        Some(token) if token.is_cancelled() => Err(DxfError::Cancelled),
+        _ => Ok(()),
     }
 }
 

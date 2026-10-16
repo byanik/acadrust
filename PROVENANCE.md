@@ -53,6 +53,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | H2 | acadrust(H2): validate AC18 decompressed size before allocating | src/io/dwg/decompressor_ac18.rs; src/io/dwg/dwg_reader.rs; src/io/limits.rs; Cargo.toml; tests/hardening_h2_ac18.rs | This fork (original work) | tests/hardening_h2_ac18.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
 | H3 | acadrust(H3): cap section and page sizes; try_reserve under budget | src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_h3_sections.rs; tests/hardening_h2_ac18.rs | This fork (original work) | tests/hardening_h3_sections.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
 | H5 | acadrust(H5): no over-read into zero padding; count page substitution | src/io/dwg/decompressor_ac21.rs; src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_h5_overread.rs | This fork (original work); policy D-3 (failsafe keeps page zero-fill, every event counted as page-zero-filled; strict errors) | tests/hardening_h5_overread.rs; src/io/dwg/dwg_reader.rs::hardening_tests |
+| C1 | acadrust(C1): CancelToken checked at stage, page and batch boundaries | src/io/limits.rs; src/io/dwg/dwg_reader.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_c1_cancel.rs | This fork (original work) | tests/hardening_c1_cancel.rs |
 
 ## Limits (H2, H3)
 
