@@ -15408,17 +15408,23 @@ impl<'a> SectionReader<'a> {
                 }
                 97 => {
                     // Number of source boundary objects
-                    let num_handles = pair.as_i32().unwrap_or(0);
+                    // This fork (H4): the count is untrusted. It is clamped,
+                    // and the loop stops at the end of the stream or at the
+                    // first pair that is not a 330 handle (pushed back for the
+                    // outer loop), so it never swallows the codes that follow.
+                    let num_handles = pair.as_i32().unwrap_or(0).clamp(0, DXF_MAX_LIST_COUNT);
                     for _ in 0..num_handles {
-                        // This fork (H4): stop at the end of the stream
-                        // instead of spinning through an untrusted count.
-                        let Some(hp) = self.reader.read_pair()? else {
-                            break;
-                        };
-                        if hp.code == 330 {
-                            if let Some(h) = hp.as_handle() {
-                                current_path_handles.push(Handle::new(h));
+                        match self.reader.read_pair()? {
+                            Some(hp) if hp.code == 330 => {
+                                if let Some(h) = hp.as_handle() {
+                                    current_path_handles.push(Handle::new(h));
+                                }
                             }
+                            Some(hp) => {
+                                self.reader.push_back(hp);
+                                break;
+                            }
+                            None => break,
                         }
                     }
                 }
@@ -15432,18 +15438,21 @@ impl<'a> SectionReader<'a> {
                     // Seed point count, followed by that many 10/20 point pairs.
                     // These sit in the trailer past every boundary path, so the
                     // 10/20 codes read here can't be confused with edge vertices.
-                    let n = pair.as_i32().unwrap_or(0).max(0);
+                    // This fork (H4): the count is untrusted. It is clamped,
+                    // and the loop stops at the end of the stream as well as at
+                    // the first pair that is not a seed point, so it never
+                    // stores a point the file does not hold.
+                    let n = pair.as_i32().unwrap_or(0).clamp(0, DXF_MAX_LIST_COUNT);
                     for _ in 0..n {
-                        let mut x = 0.0;
-                        let mut y = 0.0;
-                        if let Some(p) = self.reader.read_pair()? {
-                            if p.code == 10 {
-                                x = p.as_double().unwrap_or(0.0);
-                            } else {
+                        let x = match self.reader.read_pair()? {
+                            Some(p) if p.code == 10 => p.as_double().unwrap_or(0.0),
+                            Some(p) => {
                                 self.reader.push_back(p);
                                 break;
                             }
-                        }
+                            None => break,
+                        };
+                        let mut y = 0.0;
                         if let Some(p) = self.reader.read_pair()? {
                             if p.code == 20 {
                                 y = p.as_double().unwrap_or(0.0);
@@ -15713,32 +15722,38 @@ impl<'a> SectionReader<'a> {
             }
         }
 
+        // This fork (H4): groups 95, 96 and 97 are untrusted. Each count is
+        // clamped, and each loop below stops at the end of the stream or at the
+        // first pair that does not start an element (pushed back), so every
+        // turn consumes input and no element is stored that the file lacks.
+        let num_knots = num_knots.clamp(0, DXF_MAX_LIST_COUNT);
+        let num_control_points = num_control_points.clamp(0, DXF_MAX_LIST_COUNT);
+
         // Read knot values (code 40)
         for _ in 0..num_knots {
-            if let Some(p) = self.reader.read_pair()? {
-                if p.code == 40 {
-                    edge.knots.push(p.as_double().unwrap_or(0.0));
-                } else {
+            match self.reader.read_pair()? {
+                Some(p) if p.code == 40 => edge.knots.push(p.as_double().unwrap_or(0.0)),
+                Some(p) => {
                     self.reader.push_back(p);
                     break;
                 }
+                None => break,
             }
         }
 
         // Read control points (codes 10/20, with optional weight 42)
         for _ in 0..num_control_points {
-            let mut x = 0.0;
+            // Read 10, 20
+            let x = match self.reader.read_pair()? {
+                Some(p) if p.code == 10 => p.as_double().unwrap_or(0.0),
+                Some(p) => {
+                    self.reader.push_back(p);
+                    break;
+                }
+                None => break,
+            };
             let mut y = 0.0;
             let mut w = 1.0;
-            // Read 10, 20
-            if let Some(p) = self.reader.read_pair()? {
-                if p.code == 10 {
-                    x = p.as_double().unwrap_or(0.0);
-                } else {
-                    self.reader.push_back(p);
-                    continue;
-                }
-            }
             if let Some(p) = self.reader.read_pair()? {
                 if p.code == 20 {
                     y = p.as_double().unwrap_or(0.0);
@@ -15767,17 +15782,16 @@ impl<'a> SectionReader<'a> {
         }
 
         // Read fit points (codes 11/21)
-        for _ in 0..num_fit_points {
-            let mut x = 0.0;
-            let mut y = 0.0;
-            if let Some(p) = self.reader.read_pair()? {
-                if p.code == 11 {
-                    x = p.as_double().unwrap_or(0.0);
-                } else {
+        for _ in 0..num_fit_points.clamp(0, DXF_MAX_LIST_COUNT) {
+            let x = match self.reader.read_pair()? {
+                Some(p) if p.code == 11 => p.as_double().unwrap_or(0.0),
+                Some(p) => {
                     self.reader.push_back(p);
-                    continue;
+                    break;
                 }
-            }
+                None => break,
+            };
+            let mut y = 0.0;
             if let Some(p) = self.reader.read_pair()? {
                 if p.code == 21 {
                     y = p.as_double().unwrap_or(0.0);
