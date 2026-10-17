@@ -45,6 +45,9 @@ Commit `vendor(acadrust): import pristine 0.6.4 (LF-normalised, ODA PDF excluded
 
 One row per patch commit, in commit order. "Commit" is the subject line (`git log --grep`
 finds it). Origin says where the change came from; LibreDWG (GPL) is never consulted.
+Corrections to the documents themselves are `vendor(acadrust):` commits and carry no row.
+`Core/scripts/fork-export.sh --verify` compares these rows with the `acadrust(<ID>):`
+commits one by one, in order.
 
 | ID | Commit | Files | Origin | Test |
 |---|---|---|---|---|
@@ -61,6 +64,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | F16 | acadrust(F16): gate DWG/DXF writers and import behind features | Cargo.toml; src/lib.rs; src/io/mod.rs; src/io/dwg/mod.rs; src/io/dwg/file_headers/mod.rs; src/io/dxf/mod.rs; src/io/dwg/embedded_entity.rs; src/io/dwg/r12/mod.rs; src/io/loft_parameters.rs; src/io/loft_surface_curves.rs; src/io/surface_history.rs; src/objects/mod.rs; 13 upstream unit-test modules (cfg only); tests/hardening_f16_readonly.rs | This fork (original work); writers stay in the fork for upstream tests and the fixture generator (decision D-7) | tests/hardening_f16_readonly.rs; src/io/dwg/embedded_entity.rs::hardening_tests (opaque without writers, typed with writers) |
 | F9 | acadrust(F9): cherry-pick upstream 0e46236 (#134 auxiliary classes) | src/io/dwg/dwg_document_builder.rs; src/io/dwg/dwg_reader.rs; tests/issue134.rs; Cargo.toml | Upstream acadrust 0e4623614469db8e1eb168953884649f1a961868 (MPL-2.0, author Hakan Ak); context conflicts in dwg_document_builder.rs (upstream parent b62555f #133, fork patch C1) resolved by hand; added/removed lines identical to upstream (`git patch-id --stable` of the -U0 diff = 78ac6a65205edf9951c72c704ba53c7966cbff4d) | tests/issue134.rs (upstream); tests/hardening_f9_sweep.rs (this fork: damaged-record sweep, no panic escapes the recovery) |
 | F10 | acadrust(F10): skip CRC-valid empty type-55 stubs silently | src/io/dwg/dwg_document_builder.rs; src/io/dwg/dwg_stream_readers/object_reader/mod.rs; Cargo.toml; tests/hardening_f9_f10.rs | This fork (original work); stub shape from the spike verifier (11-byte CRC-valid records of the unused fixed type 55) | tests/hardening_f9_f10.rs |
+| F9 | acadrust(F9): sweep damaged auxiliary records for panics | Cargo.toml; PROVENANCE.md; tests/hardening_f9_sweep.rs | This fork (original work); test only, no change under src/ | tests/hardening_f9_sweep.rs |
 | F3 | acadrust(F3): decode AcDbImpBlockRefPathObjectId, persistent subent ids, VX flags | src/io/dwg/dwg_stream_readers/object_reader/associative.rs; src/io/dwg/dwg_stream_readers/object_reader/tables.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_f3_decode.rs | Re-derived (see "F3 provenance"); LibreDWG consulted: no | tests/hardening_f3_decode.rs |
 | H4 | acadrust(H4): clamp and stop the HATCH 95, 96, 97 and 98 count loops | src/io/dxf/reader/section_reader.rs; tests/hardening_h4_dxf.rs; tests/hardening/h4_hatch9*_eof.dxf; tests/hardening/h4_hatch_lists_huge.dxf | This fork (original work); second H4 commit, the first commit's clamp-and-stop pattern applied to the seed-point, spline knot, control-point and fit-point and source-object loops | tests/hardening_h4_dxf.rs |
 | H3 | acadrust(H3): checked offset sum in the AC1021 page map | src/io/dwg/dwg_reader.rs | This fork (original work); found by the T24 seed smoke test (debug-build `attempt to add with overflow` on mutated AC1021 files) | src/io/dwg/dwg_reader.rs::hardening_tests |
