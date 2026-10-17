@@ -2320,23 +2320,7 @@ impl<R: Read + Seek> DwgReader<R> {
             0xEF,
         )?;
 
-        let mut cursor = Cursor::new(&page_buffer);
-        let mut offset: i64 = 0;
-
-        while (cursor.position() as usize) < page_buffer.len() {
-            let size = cursor.read_i64::<LittleEndian>()?;
-            let id = cursor.read_i64::<LittleEndian>()?;
-
-            if size == 0 && id == 0 {
-                // Terminator — all remaining bytes are padding
-                break;
-            }
-
-            let ind = id.unsigned_abs();
-
-            info.page_records.insert(ind as i32, (offset, size));
-            offset += size;
-        }
+        parse_page_map_ac21(&page_buffer, &mut info.page_records)?;
 
         self.notifications.notify(
             NotificationType::Warning,
@@ -3508,6 +3492,38 @@ pub(crate) fn recover_mtext_bg_roundtrip(document: &mut crate::document::CadDocu
     }
 }
 
+/// Parse a decoded AC1021 page map into `records` (page id -> file offset, size).
+///
+/// This fork (H3): the sizes come from the file, so the running offset is a
+/// checked sum; a page map whose sizes pass `i64::MAX` is corrupt, not a panic.
+fn parse_page_map_ac21(
+    page_buffer: &[u8],
+    records: &mut HashMap<i32, (i64, i64)>,
+) -> Result<(), DxfError> {
+    let mut cursor = Cursor::new(page_buffer);
+    let mut offset: i64 = 0;
+
+    while (cursor.position() as usize) < page_buffer.len() {
+        let size = cursor.read_i64::<LittleEndian>()?;
+        let id = cursor.read_i64::<LittleEndian>()?;
+
+        if size == 0 && id == 0 {
+            // Terminator — all remaining bytes are padding
+            break;
+        }
+
+        let ind = id.unsigned_abs();
+
+        records.insert(ind as i32, (offset, size));
+        offset = offset.checked_add(size).ok_or_else(|| {
+            DxfError::InvalidFormat(
+                "AC1021 page map: page sizes overflow the file offset".to_string(),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod hardening_tests {
     use super::*;
@@ -3671,5 +3687,63 @@ mod hardening_tests {
         }
         let metadata = decode_ac21_metadata(&decoded, -0x110).unwrap();
         assert_eq!(&metadata[..], &decoded[32..32 + 0x110]);
+    }
+
+    fn ac21_page_map(entries: &[(i64, i64)]) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        for &(size, id) in entries {
+            buffer.extend_from_slice(&size.to_le_bytes());
+            buffer.extend_from_slice(&id.to_le_bytes());
+        }
+        buffer
+    }
+
+    #[test]
+    fn ac21_page_map_offsets_accumulate_and_the_terminator_stops_the_walk() {
+        // A negative id marks a gap page (its absolute value is the page id); the entry
+        // after the (0, 0) terminator is padding and must not be read.
+        let buffer = ac21_page_map(&[(0x100, 1), (0x200, -2), (0, 0), (0x40, 3)]);
+        let mut records = HashMap::new();
+        parse_page_map_ac21(&buffer, &mut records).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[&1], (0, 0x100));
+        assert_eq!(records[&2], (0x100, 0x200));
+
+        // No terminator: the walk ends with the buffer.
+        let mut records = HashMap::new();
+        parse_page_map_ac21(&ac21_page_map(&[(8, 5), (8, 6)]), &mut records).unwrap();
+        assert_eq!(records[&5], (0, 8));
+        assert_eq!(records[&6], (8, 8));
+    }
+
+    #[test]
+    fn ac21_page_map_sizes_past_i64_are_an_error_not_a_panic() {
+        for entries in [
+            vec![(i64::MAX, 1), (1, 2)],
+            vec![(i64::MAX, 1), (i64::MAX, 2)],
+            vec![(i64::MIN, 1), (-1, 2)],
+        ] {
+            let buffer = ac21_page_map(&entries);
+            let result = std::panic::catch_unwind(|| {
+                let mut records = HashMap::new();
+                parse_page_map_ac21(&buffer, &mut records)
+            });
+            assert!(
+                matches!(result, Ok(Err(DxfError::InvalidFormat(_)))),
+                "{entries:?}: expected InvalidFormat without panicking, got {result:?}"
+            );
+        }
+        // The last size may reach i64::MAX exactly; only a sum past it is refused.
+        let mut records = HashMap::new();
+        parse_page_map_ac21(&ac21_page_map(&[(i64::MAX - 1, 1), (1, 2)]), &mut records).unwrap();
+        assert_eq!(records[&2], (i64::MAX - 1, 1));
+    }
+
+    #[test]
+    fn ac21_page_map_with_a_cut_entry_is_an_error() {
+        let mut buffer = ac21_page_map(&[(8, 1)]);
+        buffer.extend_from_slice(&[0u8; 8]);
+        let mut records = HashMap::new();
+        assert!(parse_page_map_ac21(&buffer, &mut records).is_err());
     }
 }
