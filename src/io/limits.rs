@@ -167,6 +167,9 @@ pub struct ViewerOptions {
     pub skip_xrecords_over: Option<usize>,
     /// Do not store ProxyObject (non-graphical proxy) objects.
     pub skip_proxy_objects: bool,
+    /// Do not keep `EntityCommon::raw_record` (verbatim record bytes used only for write
+    /// passthrough). `graphic_data` is kept: the proxy-graphics fallback needs it.
+    pub drop_raw_records: bool,
 }
 
 /// Approximate payload of an XRecord in bytes (strings and chunks by length, scalars by width).

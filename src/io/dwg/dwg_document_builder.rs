@@ -3587,12 +3587,14 @@ impl DwgDocumentBuilder {
                 document.header.paper_space_block_handle,
             );
             // Keep the verbatim record so an untouched entity can be copied on write
-            // instead of re-encoded (see EntityCommon::raw_record).
-            entity_common.raw_record = Some(std::sync::Arc::new(crate::entities::RawRecord {
-                data: reader.raw_merged_data(),
-                handle_bits: reader.get_handle_bits(),
-                version: self.obj_reader.dxf_version(),
-            }));
+            // instead of re-encoded (see EntityCommon::raw_record). Viewers drop it (F13).
+            if !self.viewer.drop_raw_records {
+                entity_common.raw_record = Some(std::sync::Arc::new(crate::entities::RawRecord {
+                    data: reader.raw_merged_data(),
+                    handle_bits: reader.get_handle_bits(),
+                    version: self.obj_reader.dxf_version(),
+                }));
+            }
 
             match type_code {
                 // ── Simple entities ────────────────────────────────

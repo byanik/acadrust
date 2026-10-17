@@ -127,3 +127,32 @@ fn f2_viewer_mode_drops_bulky_xrecords_but_keeps_scales_and_overrides() {
     assert_eq!(overrides(&viewer), overrides(&plain));
     assert!(!viewer.objects.values().any(|o| matches!(o, ObjectType::ProxyObject(_))));
 }
+
+use acadrust::entities::Line;
+
+#[test]
+fn f13_drop_raw_records_keeps_graphic_data() {
+    let _g = lock();
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+    for i in 0..50 {
+        let x = f64::from(i);
+        let mut line = Line::from_coords(x, 0.0, 0.0, x, 1.0, 0.0);
+        if i % 2 == 0 {
+            // Proxy-style graphics: the viewer must keep these bytes (P4 fallback).
+            line.common.graphic_data = Some(vec![0x10, 0, 0, 0, 0, 0, 0, 0, i as u8, 0x55]);
+        }
+        doc.add_entity(EntityType::Line(line)).expect("line");
+    }
+    let bytes = DwgWriter::write_to_vec(&doc).expect("write dwg");
+    let plain = read_with(&bytes, ViewerOptions::default());
+    let lean = read_with(&bytes, ViewerOptions { drop_raw_records: true, ..Default::default() });
+    assert!(plain.entities().all(|e| e.common().raw_record.is_some()));
+    assert!(lean.entities().all(|e| e.common().raw_record.is_none()));
+    assert_eq!(plain.entities().count(), lean.entities().count());
+    let with_graphics = plain.entities().filter(|e| e.common().graphic_data.is_some()).count();
+    assert_eq!(with_graphics, 25, "the graphics survive a plain read, so the comparison below is not vacuous");
+    for (a, b) in plain.entities().zip(lean.entities()) {
+        assert_eq!(a.common().handle, b.common().handle);
+        assert_eq!(a.common().graphic_data, b.common().graphic_data);
+    }
+}
