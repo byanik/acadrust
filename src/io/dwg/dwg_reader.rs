@@ -407,6 +407,9 @@ pub struct DwgReadOptions {
     /// partial document.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub cancel: Option<crate::io::limits::CancelToken>,
+    /// Viewer memory options (fork patch F2/F13).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub viewer: crate::io::limits::ViewerOptions,
 }
 
 impl Default for DwgReadOptions {
@@ -415,6 +418,7 @@ impl Default for DwgReadOptions {
             failsafe: false,
             budget: None,
             cancel: None,
+            viewer: crate::io::limits::ViewerOptions::default(),
         }
     }
 }
@@ -1446,6 +1450,7 @@ impl<R: Read + Seek> DwgReader<R> {
                         record_stream_read = true;
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);
                         builder.set_failsafe(failsafe);
+                        builder.set_viewer_options(self.options.viewer.clone());
                         builder.set_cancel(self.options.cancel.clone());
                         builder.set_capture_raw_records(self.capture_raw);
                         if let Some(progress) = &self.progress {

@@ -450,6 +450,8 @@ pub struct DwgDocumentBuilder {
     obj_reader: DwgObjectReader,
     /// Whether to use failsafe mode (report skipped records via notifications).
     failsafe: bool,
+    /// Viewer memory options (fork patch F2/F13).
+    viewer: crate::io::limits::ViewerOptions,
     /// Notifications collected during building.
     notifications: NotificationCollection,
     /// Shared with `DwgReader`; reports the object-build portion of the
@@ -489,6 +491,7 @@ impl DwgDocumentBuilder {
         Self {
             obj_reader,
             failsafe: false,
+            viewer: crate::io::limits::ViewerOptions::default(),
             notifications: NotificationCollection::new(),
             progress: None,
             cancel: None,
@@ -502,6 +505,11 @@ impl DwgDocumentBuilder {
     /// instead of being silently lost.
     pub fn set_failsafe(&mut self, failsafe: bool) {
         self.failsafe = failsafe;
+    }
+
+    /// Viewer memory options (fork patch F2/F13).
+    pub fn set_viewer_options(&mut self, viewer: crate::io::limits::ViewerOptions) {
+        self.viewer = viewer;
     }
 
     pub fn set_progress_callback(&mut self, progress: std::sync::Arc<dyn Fn(u16) + Send + Sync>) {
@@ -2046,7 +2054,7 @@ impl DwgDocumentBuilder {
                 if document.section_view_style.is_none() {
                     document.section_view_style = chunk.output.section_view_style.take();
                 }
-                document.objects.extend(chunk.output.objects.drain());
+                document.objects.extend(chunk.output.objects.drain().filter(|(_, o)| self.viewer.keeps(o)));
                 entity_next_handles.extend(chunk.output.entity_next_handles.drain());
                 if let Some(visit) = visit.as_deref_mut() {
                     accept_loaded_entity_batch(document, visit, &mut chunk.output.entities);
