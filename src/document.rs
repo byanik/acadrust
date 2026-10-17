@@ -3625,6 +3625,15 @@ impl CadDocument {
         self.entities().count()
     }
 
+    /// The block record's entity handles exactly as the DWG file lists them
+    /// (R2004+ BLOCK_HEADER owned handles, or the R13–R2000 first/last chain),
+    /// independent of which entities a `read_visiting` visitor kept. May include
+    /// sub-entity handles (vertices, SEQEND, ATTRIB). `None` for DXF and for
+    /// documents not read from DWG (fork patch F18).
+    pub fn canonical_block_entities(&self, block_record: Handle) -> Option<&[Handle]> {
+        self.block_entity_handles.get(&block_record).map(Vec::as_slice)
+    }
+
     /// Iterate over all drawing entities.
     ///
     /// Structural BLOCK/ENDBLK markers are stored in the backing vector (the
