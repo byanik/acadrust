@@ -692,22 +692,24 @@ impl DwgDocumentBuilder {
         // using the fully-populated handle→name maps.
         let mut block_control_entries = Vec::new();
         enum ParsedEntry {
-            Layer(u64, tables::LayerData),
-            Block(u64, tables::BlockHeaderData),
-            Style(u64, tables::TextStyleData),
-            Ltype(u64, tables::LinetypeData),
-            DimStyle(u64, tables::DimStyleData),
-            View(u64, tables::ViewData),
-            Ucs(u64, tables::UcsData),
-            VPort(u64, tables::VPortData),
+            Layer(u64, Box<tables::LayerData>),
+            Block(u64, Box<tables::BlockHeaderData>),
+            Style(u64, Box<tables::TextStyleData>),
+            Ltype(u64, Box<tables::LinetypeData>),
+            DimStyle(u64, Box<tables::DimStyleData>),
+            View(u64, Box<tables::ViewData>),
+            Ucs(u64, Box<tables::UcsData>),
+            VPort(u64, Box<tables::VPortData>),
             AppId(u64, tables::AppIdData),
-            Vx(u64, tables::VxTableRecordData),
+            Vx(u64, Box<tables::VxTableRecordData>),
             /// BLOCK_CONTROL hard-owner refs and regular table order.
             /// These are the authoritative active model/paper space designation —
             /// the file header's block handles are unreliable on some versions.
             BlockControl(u64, u64, Vec<u64>),
             VxControl(Vec<u64>),
         }
+        // Patch F1: one slot per table record is held for the whole build; keep it small.
+        const _: () = assert!(std::mem::size_of::<ParsedEntry>() <= 64);
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
         let catalog_started = web_time::Instant::now();
         enum CatalogFailure {
@@ -966,12 +968,12 @@ impl DwgDocumentBuilder {
                             // entities with a dangling layer handle (read back as
                             // layer "0"). Entities still resolve to the base name
                             // via `maps.layers` below.
-                            Some(ParsedEntry::Layer(obj_handle, data))
+                            Some(ParsedEntry::Layer(obj_handle, Box::new(data)))
                         }
                         OBJ_BLOCK_HEADER => {
                             let data =
                                 tables::read_block_header(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::Block(obj_handle, data))
+                            Some(ParsedEntry::Block(obj_handle, Box::new(data)))
                         }
                         OBJ_BLOCK_CONTROL => {
                             // Capture the authoritative *Model_Space / *Paper_Space
@@ -987,12 +989,12 @@ impl DwgDocumentBuilder {
                         OBJ_STYLE => {
                             let data =
                                 tables::read_text_style(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::Style(obj_handle, data))
+                            Some(ParsedEntry::Style(obj_handle, Box::new(data)))
                         }
                         OBJ_LTYPE => {
                             let data =
                                 tables::read_linetype(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::Ltype(obj_handle, data))
+                            Some(ParsedEntry::Ltype(obj_handle, Box::new(data)))
                         }
                         OBJ_DIMSTYLE => {
                             let data = tables::read_dimstyle(
@@ -1000,19 +1002,19 @@ impl DwgDocumentBuilder {
                                 self.obj_reader.version(),
                                 self.obj_reader.dxf_version(),
                             );
-                            Some(ParsedEntry::DimStyle(obj_handle, data))
+                            Some(ParsedEntry::DimStyle(obj_handle, Box::new(data)))
                         }
                         OBJ_VIEW => {
                             let data = tables::read_view(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::View(obj_handle, data))
+                            Some(ParsedEntry::View(obj_handle, Box::new(data)))
                         }
                         OBJ_UCS => {
                             let data = tables::read_ucs(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::Ucs(obj_handle, data))
+                            Some(ParsedEntry::Ucs(obj_handle, Box::new(data)))
                         }
                         OBJ_VPORT => {
                             let data = tables::read_vport(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::VPort(obj_handle, data))
+                            Some(ParsedEntry::VPort(obj_handle, Box::new(data)))
                         }
                         OBJ_APPID => {
                             let data = tables::read_appid(&mut reader, self.obj_reader.version());
@@ -1025,7 +1027,7 @@ impl DwgDocumentBuilder {
                         OBJ_VPENT_HDR => {
                             let data =
                                 tables::read_vx_table_record(&mut reader, self.obj_reader.version());
-                            Some(ParsedEntry::Vx(obj_handle, data))
+                            Some(ParsedEntry::Vx(obj_handle, Box::new(data)))
                         }
                         _ => None,
                     }

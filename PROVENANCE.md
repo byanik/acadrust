@@ -67,6 +67,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | F15 | acadrust(F15): public read_visiting_with_stats | src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_f15_f18_f4.rs | This fork, new code (thin public wrapper over the private read_with_optional_visitor) | tests/hardening_f15_f18_f4.rs::f15_visit_with_stats_matches_full_read_stats |
 | F18 | acadrust(F18): public canonical block membership accessor | src/document.rs; tests/hardening_f15_f18_f4.rs | This fork, new code (read-only view of the pub(crate) block_entity_handles; rationale: visitor-consumed entities never reach BlockRecord::entity_handles, design V1) | tests/hardening_f15_f18_f4.rs::f18_* |
 | F4 | acadrust(F4): keep raw viewport status bits; expose is_off | src/entities/viewport.rs; src/entities/mod.rs; src/io/dwg/dwg_document_builder.rs; src/io/dxf/reader/section_reader.rs; src/io/dwg/legacy_viewport.rs; tests/hardening_f15_f18_f4.rs | This fork, new code (spike §2.6: from_bits drops 0x20000) | src/entities/viewport.rs::hardening_tests, tests/hardening_f15_f18_f4.rs::f4_* |
+| F1 | acadrust(F1): box ParsedEntry table variants | src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_viewer_mem.rs | The spike patch bellek-yarilama.diff hunks 1–5, re-applied by hand; OBJ_VPENT_HDR in the merged F3 form (spike §3.1) | tests/hardening_viewer_mem.rs::f1_appid_heavy_read_has_no_huge_single_allocation + compile-time size assert |
 
 ## Limits (H2, H3)
 
