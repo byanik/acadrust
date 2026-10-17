@@ -64,6 +64,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | F3 | acadrust(F3): decode AcDbImpBlockRefPathObjectId, persistent subent ids, VX flags | src/io/dwg/dwg_stream_readers/object_reader/associative.rs; src/io/dwg/dwg_stream_readers/object_reader/tables.rs; src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_f3_decode.rs | Re-derived (see "F3 provenance"); LibreDWG consulted: no | tests/hardening_f3_decode.rs |
 | H4 | acadrust(H4): clamp and stop the HATCH 95, 96, 97 and 98 count loops | src/io/dxf/reader/section_reader.rs; tests/hardening_h4_dxf.rs; tests/hardening/h4_hatch9*_eof.dxf; tests/hardening/h4_hatch_lists_huge.dxf | This fork (original work); second H4 commit, the first commit's clamp-and-stop pattern applied to the seed-point, spline knot, control-point and fit-point and source-object loops | tests/hardening_h4_dxf.rs |
 | H3 | acadrust(H3): checked offset sum in the AC1021 page map | src/io/dwg/dwg_reader.rs | This fork (original work); found by the T24 seed smoke test (debug-build `attempt to add with overflow` on mutated AC1021 files) | src/io/dwg/dwg_reader.rs::hardening_tests |
+| F15 | acadrust(F15): public read_visiting_with_stats | src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_f15_f18_f4.rs | This fork, new code (thin public wrapper over the private read_with_optional_visitor) | tests/hardening_f15_f18_f4.rs::f15_visit_with_stats_matches_full_read_stats |
 
 ## Limits (H2, H3)
 

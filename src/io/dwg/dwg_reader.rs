@@ -1147,6 +1147,22 @@ impl<R: Read + Seek> DwgReader<R> {
             .map(|outcome| outcome.document)
     }
 
+    /// Like [`read_visiting`](Self::read_visiting), but returns the full
+    /// [`ReadOutcome`](crate::io::read::ReadOutcome), including `ReadStats`
+    /// and the structured diagnostics (fork patch F15).
+    pub fn read_visiting_with_stats<F>(
+        &mut self,
+        mut visit: F,
+    ) -> std::result::Result<crate::io::read::ReadOutcome, DxfError>
+    where
+        F: FnMut(
+            &crate::document::CadDocument,
+            crate::entities::EntityType,
+        ) -> Option<crate::entities::EntityType>,
+    {
+        self.read_with_optional_visitor(Some(&mut visit))
+    }
+
     /// Read the file and return the document with source/decode statistics.
     pub fn read_with_stats(
         &mut self,
