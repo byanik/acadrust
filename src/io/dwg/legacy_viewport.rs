@@ -152,7 +152,10 @@ pub(crate) fn restore(v: &mut Viewport, layer_handle: impl Fn(&str) -> Option<cr
     v.lens_length = real(6);
     v.front_clip_z = real(7);
     v.back_clip_z = real(8);
-    v.status = crate::entities::ViewportStatusFlags::from_bits(int(9) as i32 | 0x8000);
+    let (status, raw) =
+        crate::entities::viewport::viewport_status_from_raw(int(9) as i32 | 0x8000);
+    v.status = status;
+    v.status_raw = raw;
     v.circle_sides = int(10);
     v.status.fast_zoom = int(11) != 0;
     v.ucs_icon_visible = int(12) & 1 != 0;

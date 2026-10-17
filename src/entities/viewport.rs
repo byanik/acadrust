@@ -135,6 +135,65 @@ impl ViewportStatusFlags {
     }
 }
 
+#[cfg(feature = "serde")]
+fn default_status_raw() -> i32 {
+    0x8000
+}
+
+/// Where a viewport's status word came from: the "off" rule differs (fork patch F4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportSource {
+    /// R2000+ DWG: off = bit 0x20000.
+    DwgR2000Plus,
+    /// R13/R14 DWG: `is_on` comes from the VX table.
+    DwgR13R14,
+    /// DXF: group 68 == 0, or bit 0x20000 in group 90.
+    Dxf,
+}
+
+/// Decode a raw status word and keep the raw value alongside (single mapping point for
+/// the DWG builder, the DXF reader and the R13/R14 MVIEW restore).
+pub(crate) fn viewport_status_from_raw(raw: i32) -> (ViewportStatusFlags, i32) {
+    (ViewportStatusFlags::from_bits(raw), raw)
+}
+
+impl Viewport {
+    /// Whether the viewport is switched off (its content is not drawn; its border still is).
+    pub fn is_off(&self, source: ViewportSource) -> bool {
+        match source {
+            ViewportSource::DwgR2000Plus => self.status_raw & 0x20000 != 0,
+            ViewportSource::DwgR13R14 => !self.status.is_on,
+            ViewportSource::Dxf => self.dxf_status == Some(0) || self.status_raw & 0x20000 != 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[test]
+    fn raw_status_keeps_the_off_bit() {
+        let (flags, raw) = viewport_status_from_raw(0xC8020);
+        assert!(flags.is_on);
+        assert_eq!(raw & 0x20000, 0);
+        let mut vp = Viewport::new();
+        vp.status = flags;
+        vp.status_raw = raw;
+        assert!(!vp.is_off(ViewportSource::Dxf));
+        assert!(!vp.is_off(ViewportSource::DwgR2000Plus));
+        let (_, raw_off) = viewport_status_from_raw(0xE8020);
+        vp.status_raw = raw_off;
+        assert!(vp.is_off(ViewportSource::DwgR2000Plus));
+        assert!(vp.is_off(ViewportSource::Dxf));
+        vp.status.is_on = false;
+        assert!(vp.is_off(ViewportSource::DwgR13R14));
+        vp.status_raw = 0x8000;
+        vp.dxf_status = Some(0);
+        assert!(vp.is_off(ViewportSource::Dxf));
+    }
+}
+
 /// Render mode for viewport display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -255,6 +314,11 @@ pub struct Viewport {
     pub height: f64,
     /// Viewport status flags
     pub status: ViewportStatusFlags,
+    /// Status word exactly as read (DWG BL / DXF group 90). Keeps 0x20000
+    /// ("viewport off") and higher bits that `ViewportStatusFlags` drops
+    /// (fork patch F4).
+    #[cfg_attr(feature = "serde", serde(default = "default_status_raw"))]
+    pub status_raw: i32,
     /// Viewport ID (unique within the drawing)
     pub id: i16,
     /// DXF group 68 status/stacking value when it was present in the source.
@@ -358,6 +422,7 @@ impl Viewport {
             width: 297.0,  // A4 width in mm
             height: 210.0, // A4 height in mm
             status: ViewportStatusFlags::default_on(),
+            status_raw: 0x8000,
             id: 0,
             dxf_status: None,
             off_screen: false,

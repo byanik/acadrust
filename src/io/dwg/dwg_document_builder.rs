@@ -4192,7 +4192,10 @@ impl DwgDocumentBuilder {
                     if self.obj_reader.version().r2007_plus() {
                         e.grid_major = data.grid_major;
                     }
-                    e.status = ViewportStatusFlags::from_bits(data.status_flags);
+                    let (status, raw) =
+                        crate::entities::viewport::viewport_status_from_raw(data.status_flags);
+                    e.status = status;
+                    e.status_raw = raw;
                     e.style_sheet = data.style_sheet;
                     e.render_mode = ViewportRenderMode::from_value(data.render_mode as i16);
                     e.ucs_at_origin = data.ucs_at_origin;

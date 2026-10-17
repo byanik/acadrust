@@ -17002,7 +17002,10 @@ impl<'a> SectionReader<'a> {
                 }
                 90 => {
                     if let Some(v) = pair.as_i32() {
-                        vp.status = crate::entities::viewport::ViewportStatusFlags::from_bits(v);
+                        let (status, raw) =
+                            crate::entities::viewport::viewport_status_from_raw(v);
+                        vp.status = status;
+                        vp.status_raw = raw;
                     }
                 }
                 68 => {

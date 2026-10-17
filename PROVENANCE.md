@@ -66,6 +66,7 @@ finds it). Origin says where the change came from; LibreDWG (GPL) is never consu
 | H3 | acadrust(H3): checked offset sum in the AC1021 page map | src/io/dwg/dwg_reader.rs | This fork (original work); found by the T24 seed smoke test (debug-build `attempt to add with overflow` on mutated AC1021 files) | src/io/dwg/dwg_reader.rs::hardening_tests |
 | F15 | acadrust(F15): public read_visiting_with_stats | src/io/dwg/dwg_reader.rs; Cargo.toml; tests/hardening_f15_f18_f4.rs | This fork, new code (thin public wrapper over the private read_with_optional_visitor) | tests/hardening_f15_f18_f4.rs::f15_visit_with_stats_matches_full_read_stats |
 | F18 | acadrust(F18): public canonical block membership accessor | src/document.rs; tests/hardening_f15_f18_f4.rs | This fork, new code (read-only view of the pub(crate) block_entity_handles; rationale: visitor-consumed entities never reach BlockRecord::entity_handles, design V1) | tests/hardening_f15_f18_f4.rs::f18_* |
+| F4 | acadrust(F4): keep raw viewport status bits; expose is_off | src/entities/viewport.rs; src/entities/mod.rs; src/io/dwg/dwg_document_builder.rs; src/io/dxf/reader/section_reader.rs; src/io/dwg/legacy_viewport.rs; tests/hardening_f15_f18_f4.rs | This fork, new code (spike §2.6: from_bits drops 0x20000) | src/entities/viewport.rs::hardening_tests, tests/hardening_f15_f18_f4.rs::f4_* |
 
 ## Limits (H2, H3)
 

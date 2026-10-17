@@ -149,7 +149,9 @@ pub use underlay::{
 };
 pub use unknown_entity::UnknownEntity;
 pub use view_border::ViewBorder;
-pub use viewport::{GridFlags, StandardView, Viewport, ViewportRenderMode, ViewportStatusFlags};
+pub use viewport::{
+    GridFlags, StandardView, Viewport, ViewportRenderMode, ViewportSource, ViewportStatusFlags,
+};
 pub use wipeout::{Wipeout, WipeoutClipMode, WipeoutClipType, WipeoutDisplayFlags};
 pub use xline::XLine;
 
