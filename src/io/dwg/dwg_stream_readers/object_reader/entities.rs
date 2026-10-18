@@ -3617,7 +3617,10 @@ fn read_table_cell(reader: &mut DwgMergedReader, version: DwgVersion) -> TableCe
         cell.custom_data_items
             .push(read_custom_table_data(reader, version));
     }
-    cell.has_linked_data = reader.read_bit_long() == 1;
+    // A flags word, not a bool: AutoCAD writes 3 for a cell tied to a data link. Only 0 means
+    // no link fields follow (patch P3; read as `== 1`, the link handle and its three
+    // numbers were left behind and the cell count after them came out garbage).
+    cell.has_linked_data = reader.read_bit_long() != 0;
     if cell.has_linked_data {
         let handle = reader.read_handle();
         cell.data_link_handle = (handle != 0).then(|| Handle::from(handle));
@@ -3874,7 +3877,9 @@ fn read_legacy_table_style_override(reader: &mut DwgMergedReader) -> LegacyTable
         value.title_suppressed = Some(reader.read_bit());
     }
     if flags & 0x0002 != 0 {
-        value.header_suppressed = Some(reader.read_bit());
+        // Always true and no data: the ODA spec says not to read anything for it (patch P3;
+        // a bit read here moved every later field of the override by one).
+        value.header_suppressed = Some(true);
     }
     if flags & 0x0004 != 0 {
         value.flow_direction = Some(reader.read_bit_short());
@@ -6246,5 +6251,126 @@ mod tests {
         assert!(result.acis_empty);
         assert!(result.sat_data.is_empty());
         assert!(result.sab_data.is_empty());
+    }
+
+    // ── Patch P3: ACAD_TABLE layouts the corpus showed ──────────────────
+
+    /// One R2010+ table cell, field by field as TABLECONTENT lays it out: a text value in its
+    /// only content, no custom data, no cell style, no geometry. `linked` is the "has linked
+    /// data" flags word and `link` the data-link fields that follow when it is non-zero.
+    fn write_p3_cell(w: &mut DwgMergedWriter, linked: i32, link: Option<(u64, i32, i32)>) {
+        use crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer;
+        w.write_bit_long(if link.is_some() { 5 } else { 0 }); // state: locked + linked
+        w.write_variable_text(""); // tooltip
+        w.write_bit_long(0); // custom data
+        w.write_bit_long(0); // no custom items
+        w.write_bit_long(linked);
+        if let Some((handle, rows, columns)) = link {
+            w.write_handle(HardPointer, handle);
+            w.write_bit_long(rows);
+            w.write_bit_long(columns);
+            w.write_bit_long(0); // unknown
+        }
+        w.write_bit_long(1); // one content
+        w.write_bit_long(1); // content type: value
+        w.write_bit_long(2); // value flags
+        w.write_bit_long(4); // value type: string
+        let text = "AB";
+        let mut bytes: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes.extend([0, 0]);
+        w.write_bit_long(bytes.len() as i32);
+        w.write_bytes(&bytes);
+        w.write_bit_long(0); // unit type
+        w.write_variable_text(""); // format
+        w.write_variable_text(text); // formatted value
+        w.write_bit_long(0); // no attributes
+        w.write_bit_short(0); // no content format override
+        w.write_bit_long(0); // cell style type
+        w.write_bit_short(0); // no cell style data
+        w.write_bit_long(0); // cell style id
+        w.write_bit_long(0); // no geometry
+    }
+
+    /// "Has linked data" is a flags word: AutoCAD writes 3 for a cell tied to a data link, not
+    /// only 1. Read as `== 1`, the link handle and its three numbers were left in the stream,
+    /// the next count was read from them, and the whole table record failed (four R2013
+    /// drawings lost every table that way).
+    #[test]
+    fn table_cell_with_linked_data_flags_of_three_reads_its_data_link() {
+        let v = DwgVersion::AC24;
+        for d in [DxfVersion::AC1024, DxfVersion::AC1027, DxfVersion::AC1032] {
+            for linked in [1, 3] {
+                let mut r = make_reader(v, d, |w| {
+                    w.save_position_for_size();
+                    write_p3_cell(w, linked, Some((0x1234, 32, 8)));
+                    w.write_bit_long(0xabc); // the field after the cell must start here
+                });
+                let size = r.read_raw_long();
+                r.setup_text_and_handle(size);
+                let cell = read_table_cell(&mut r, v);
+                assert!(cell.has_linked_data, "{d:?}/{linked}");
+                assert_eq!(cell.data_link_handle, Some(Handle::from(0x1234)), "{d:?}/{linked}");
+                assert_eq!((cell.data_link_rows, cell.data_link_columns), (32, 8), "{d:?}/{linked}");
+                assert_eq!(cell.contents.len(), 1, "{d:?}/{linked}");
+                assert_eq!(cell.contents[0].value.text, "AB", "{d:?}/{linked}");
+                assert_eq!(r.read_bit_long(), 0xabc, "{d:?}/{linked}: consumed exactly");
+                assert!(r.check_error().is_ok(), "{d:?}/{linked}");
+            }
+            // no link: flag 0 and no link fields
+            let mut r = make_reader(v, d, |w| {
+                w.save_position_for_size();
+                write_p3_cell(w, 0, None);
+                w.write_bit_long(0xabc);
+            });
+            let size = r.read_raw_long();
+            r.setup_text_and_handle(size);
+            let cell = read_table_cell(&mut r, v);
+            assert!(!cell.has_linked_data && cell.data_link_handle.is_none(), "{d:?}");
+            assert_eq!(r.read_bit_long(), 0xabc, "{d:?}");
+            assert!(r.check_error().is_ok(), "{d:?}");
+        }
+    }
+
+    /// Pre-R2010 table overrides: the "header suppressed" bit (0x0002) is always true and
+    /// carries no data (ODA spec, table flag override). Read as a bit, it moved every later
+    /// field of the override one bit and the table failed (24 of 46 tables of two R2004/R2007
+    /// sheet templates).
+    #[test]
+    fn table_override_with_the_header_flag_reads_no_bit_for_it() {
+        use crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer;
+        let v = DwgVersion::AC18;
+        let d = DxfVersion::AC1018;
+        // 0x1b = title suppressed (B), header suppressed (nothing), horizontal margin (BD),
+        // vertical margin (BD); 0x40000 = one text style handle
+        let mut r = make_reader(v, d, |w| {
+            w.write_bit_long(0x4001b);
+            w.write_bit(true); // title suppressed
+            w.write_bit_double(0.25); // horizontal margin
+            w.write_bit_double(0.5); // vertical margin
+            w.write_handle(HardPointer, 0x77); // text style
+            w.write_bit_long(0xabc);
+        });
+        let value = read_legacy_table_style_override(&mut r);
+        assert_eq!(value.flags, 0x4001b);
+        assert_eq!(value.title_suppressed, Some(true));
+        assert_eq!(value.header_suppressed, Some(true));
+        assert_eq!(value.horizontal_cell_margin, Some(0.25));
+        assert_eq!(value.vertical_cell_margin, Some(0.5));
+        assert_eq!(value.text_style_handles, vec![Handle::from(0x77)]);
+        assert_eq!(r.read_bit_long(), 0xabc, "consumed exactly");
+        assert!(r.check_error().is_ok());
+
+        // without the header bit nothing changes
+        let mut r = make_reader(v, d, |w| {
+            w.write_bit_long(0x19);
+            w.write_bit(false);
+            w.write_bit_double(0.25);
+            w.write_bit_double(0.5);
+            w.write_bit_long(0xabc);
+        });
+        let value = read_legacy_table_style_override(&mut r);
+        assert_eq!(value.header_suppressed, None);
+        assert_eq!(value.title_suppressed, Some(false));
+        assert_eq!(r.read_bit_long(), 0xabc);
     }
 }
