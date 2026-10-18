@@ -109,6 +109,10 @@ pub struct ReadStats {
     pub source_records: usize,
     pub decoded_source_records: usize,
     pub skipped_source_records: usize,
+    /// Records of known non-graphical classes (VBA project, solid-history, line-style
+    /// definitions and the like) that could not be decoded. They are neither skipped nor
+    /// errors: a strict read does not fail on them (this fork, patch P3).
+    pub known_nongraphical_records: usize,
     pub output_entities: usize,
     pub output_objects: usize,
     pub output_table_records: usize,
@@ -140,6 +144,7 @@ impl ReadStats {
             source_records,
             decoded_source_records,
             skipped_source_records,
+            known_nongraphical_records: 0,
             output_entities: document.entities().count(),
             output_objects: document.objects.len(),
             output_table_records: document.layers.iter().count()

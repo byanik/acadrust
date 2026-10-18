@@ -76,6 +76,7 @@ commits one by one, in order.
 | F13 | acadrust(F13): viewer option to drop EntityCommon::raw_record | src/io/limits.rs; src/io/dwg/dwg_document_builder.rs; tests/hardening_viewer_mem.rs | This fork, new code (gaps C2) | tests/hardening_viewer_mem.rs::f13_drop_raw_records_keeps_graphic_data |
 | P1 | acadrust(P1): read the inline names of a colour-book entity colour | src/io/dwg/dwg_stream_readers/bit_reader.rs; Cargo.toml; tests/hardening_p1_line_decode.rs; PROVENANCE.md | This fork, new code; layout re-derived from ODA spec 2.11 and bit traces of five public drawings (see "P1 provenance"); LibreDWG consulted: no | tests/hardening_p1_line_decode.rs |
 | P3 | acadrust(P3): read ACAD_TABLE linked-data flags and the header-suppressed override as written | src/io/dwg/dwg_stream_readers/object_reader/entities.rs; src/io/dwg/dwg_stream_writers/object_writer/entities.rs; PROVENANCE.md | This fork, new code; the override rule is ODA spec 20.4.96.1, the linked-data flags word comes from bit traces of public drawings (see "P3 provenance"); LibreDWG consulted: no | src/io/dwg/dwg_stream_readers/object_reader/entities.rs::tests (table_cell_with_linked_data_flags_of_three_reads_its_data_link, table_override_with_the_header_flag_reads_no_bit_for_it) |
+| P3 | acadrust(P3): count records of known non-graphical classes apart from skipped ones | src/io/dwg/dwg_document_builder.rs; src/io/dwg/dwg_reader.rs; src/io/read.rs; Cargo.toml; tests/hardening_p3_nongraphical.rs; PROVENANCE.md | This fork, new code; extends the F9 auxiliary-object mechanism (see "P3 provenance"); LibreDWG consulted: no | tests/hardening_p3_nongraphical.rs |
 
 ## Limits (H2, H3)
 
@@ -176,3 +177,15 @@ framed correctly, found with a bit trace of the failing records (aggregate facts
 | Linked-data flags (R2010+, TABLECONTENT cells) | "Has linked data flags" (BL 92) is a flags word. Four R2013 drawings store 3 on the cell that carries the table's data link (the other cells 0), then the link handle and three BL numbers (row and column count of the linked range, one unknown). The reader took `== 1` as the only value, left those fields in the stream, read the next count from them, and the whole record failed (every table of the four drawings). Now any non-zero word reads the link fields. All four drawings then decode all tables, cell by cell, to the last bit |
 | Header-suppressed override (pre-R2010 tables) | In the table flag override (BL 93), bit 0x0002 "header suppressed" is "always true (do not read any data for this)" in the ODA spec. The reader and the writer both handled it as a bit. The 24 tables of two R2004/R2007 sheet templates that set 0x0002 (flags 0x40001b) ended their override one bit too far and failed; the 22 that did not decoded. Now the reader reads nothing and reports `Some(true)`, and the writer writes nothing. Both templates then decode 46 of 46 tables |
 | Not changed | The cell-content type 8 seen in the traces of the broken reads was a consequence of the first cause, not a type to decode. Nothing else of the table readers moved |
+
+The second P3 commit does not change what any decoder reads. In the same public drawings, objects
+of classes that never draw anything failed to decode, were counted as skipped records and made a
+strict read (failsafe off) fail. They are now kept raw when their framing and common data are
+sound (the F9 mechanism: `ObjectType::Unknown` with the raw record) and counted apart otherwise;
+neither case is a skipped record or an error.
+
+| Item | Finding |
+|---|---|
+| The list | Fixed type 81 (VBA_PROJECT), and the classes `LSDEFINITION`, `LSSTROKEPATTERNCOMPONENT`, `BREAKDATA`, `ACDBASSOC2DCONSTRAINTGROUP`, `ACDBASSOCPLANESURFACEACTIONBODY` and every `ACSH_*` (solid history: extrusion, sweep, revolve, loft, boolean and so on). Names are compared in upper case without stray characters; a class the table marks as an entity is never in the list. In the 1,403 public drawings (at least, the reader caps its diagnostics at 1,000 a file): VBA_PROJECT 167 records in 167 drawings, LSDEFINITION 2,301 in 8, LSSTROKEPATTERNCOMPONENT 97 in 9, ACSH_* 102 in 2, ACDBASSOC2DCONSTRAINTGROUP 13 in 10, BREAKDATA 2, ACDBASSOCPLANESURFACEACTIONBODY 1 |
+| Reporting | `DwgBuildOutcome::known_nongraphical_records` and `ReadStats::known_nongraphical_records`; diagnostics `known-nongraphical-preserved` and `known-nongraphical-skipped`; the notification is a warning, so the record is not among the recovered errors either. `skipped_source_records` no longer counts them, and the strict-read failure on a skipped record no longer fires for them |
+| Not decoded | None of the classes gains a decoder. The line-style definitions are Plan 4's work (complex line types); the others have no use in a viewer |

@@ -1435,6 +1435,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let mut record_stream_read = false;
         let mut decoded_source_records = 0usize;
         let mut skipped_source_records = 0usize;
+        let mut known_nongraphical_records = 0usize;
         let objects_started = web_time::Instant::now();
         if !handle_map.is_empty() {
             match self.get_section_buffer("AcDb:AcDbObjects", &info) {
@@ -1465,6 +1466,7 @@ impl<R: Read + Seek> DwgReader<R> {
                         }
                         decoded_source_records = build_outcome.decoded_records;
                         skipped_source_records = build_outcome.skipped_records;
+                        known_nongraphical_records = build_outcome.known_nongraphical_records;
                         if !failsafe && skipped_source_records != 0 {
                             return Err(DxfError::Parse(build_outcome.diagnostics.iter()
                                 .find(|diagnostic| diagnostic.code != "auxiliary-object-preserved")
@@ -1715,7 +1717,7 @@ impl<R: Read + Seek> DwgReader<R> {
         self.merge_page_diagnostics(&mut diagnostics);
         let source_sections =
             usize::from(handles_section_read).saturating_add(usize::from(objects_section_read));
-        let stats = crate::io::read::ReadStats::from_document(
+        let mut stats = crate::io::read::ReadStats::from_document(
             &document,
             SourceFormat::Dwg,
             source_sections,
@@ -1727,6 +1729,7 @@ impl<R: Read + Seek> DwgReader<R> {
             true,
             diagnostics,
         );
+        stats.known_nongraphical_records = known_nongraphical_records;
         Ok(crate::io::read::ReadOutcome::new(document, stats))
     }
 

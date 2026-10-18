@@ -289,6 +289,9 @@ struct RecordFailure {
     type_code: i16,
     /// True when a failed auxiliary payload was retained as a validated raw record.
     recoverable: bool,
+    /// True for a record of a known non-graphical class (fork patch P3): never counted as
+    /// skipped, whether it was retained raw or not.
+    known_nongraphical: bool,
     message: String,
 }
 
@@ -318,6 +321,9 @@ pub struct DwgBuildOutcome {
     pub notifications: NotificationCollection,
     pub decoded_records: usize,
     pub skipped_records: usize,
+    /// Records of known non-graphical classes that could not be decoded: neither skipped nor
+    /// errors (this fork, patch P3).
+    pub known_nongraphical_records: usize,
     pub diagnostics: Vec<ReadDiagnostic>,
     /// The cancel token fired; the document is incomplete and must be
     /// discarded (this fork, patch C1).
@@ -535,6 +541,7 @@ impl DwgDocumentBuilder {
             notifications: self.notifications,
             decoded_records: 0,
             skipped_records: 0,
+            known_nongraphical_records: 0,
             diagnostics,
             cancelled: true,
         }
@@ -662,6 +669,7 @@ impl DwgDocumentBuilder {
         handles.sort_unstable();
         let mut skipped_pass1 = 0u32;
         let mut skipped_pass2 = 0u32;
+        let mut known_nongraphical = 0usize;
         let mut decoded_pass2 = 0usize;
         let mut diagnostics = Vec::new();
         let total_handles = handles.len();
@@ -1853,6 +1861,7 @@ impl DwgDocumentBuilder {
                                     offset,
                                     type_code,
                                     recoverable: false,
+                                    known_nongraphical: false,
                                     message: format!(
                                         "Could not read record at handle {handle:#X}, type_code={type_code}: {error}"
                                     ),
@@ -1893,12 +1902,19 @@ impl DwgDocumentBuilder {
                     if let Some(message) = reader.check_error().err().map(|e| e.to_string())
                         .or_else(|| result.err().map(|_| "Record decoder panicked".to_string()))
                     {
-                        let recovered = (raw_type_code >= 500
-                            && !entity_class_numbers.contains(&raw_type_code)
+                        // Patch P3: a record of a known non-graphical class that cannot be
+                        // decoded is kept raw when its framing is sound and counted apart from
+                        // the skipped records either way.
+                        let known_nongraphical = !entity_class_numbers.contains(&raw_type_code)
                             && !is_entity_type(type_code)
-                            && Self::is_recoverable_auxiliary_class(
-                                &class_names, raw_type_code, type_code,
-                            ))
+                            && Self::is_known_nongraphical(&class_names, raw_type_code, type_code);
+                        let recovered = (known_nongraphical
+                            || (raw_type_code >= 500
+                                && !entity_class_numbers.contains(&raw_type_code)
+                                && !is_entity_type(type_code)
+                                && Self::is_recoverable_auxiliary_class(
+                                    &class_names, raw_type_code, type_code,
+                                )))
                         .then(|| {
                             self.recover_auxiliary_object(
                                 handle, raw_type_code, type_code, offset, &class_names,
@@ -1949,16 +1965,28 @@ impl DwgDocumentBuilder {
                             chunk.output.objects.insert(object_handle, object);
                         }
                         chunk.failures.push(RecordFailure {
-                            code: if recoverable {
-                                "auxiliary-object-preserved"
-                            } else {
-                                "record-decode-failed"
+                            code: match (known_nongraphical, recoverable) {
+                                (true, true) => "known-nongraphical-preserved",
+                                (true, false) => "known-nongraphical-skipped",
+                                (false, true) => "auxiliary-object-preserved",
+                                (false, false) => "record-decode-failed",
                             },
                             handle,
                             offset,
                             type_code,
                             recoverable,
-                            message: if recoverable {
+                            known_nongraphical,
+                            message: if known_nongraphical {
+                                let name = Self::unknown_object_type_name(&class_names, raw_type_code);
+                                let what = if recoverable {
+                                    "kept as raw DWG data"
+                                } else {
+                                    "passed over"
+                                };
+                                format!(
+                                    "Known non-graphical object {name} at handle {handle:#X}, type_code={raw_type_code} not decoded, {what}: {message}"
+                                )
+                            } else if recoverable {
                                 let name = Self::unknown_object_type_name(&class_names, raw_type_code);
                                 format!(
                                     "Preserved auxiliary object {name} at handle {handle:#X}, type_code={raw_type_code} as raw DWG data after decode failure: {message}"
@@ -2077,11 +2105,20 @@ impl DwgDocumentBuilder {
                         .append(&mut attributes);
                 }
                 for failure in chunk.failures {
-                    if !failure.recoverable {
+                    if failure.known_nongraphical {
+                        known_nongraphical += 1;
+                    } else if !failure.recoverable {
                         skipped_pass2 += 1;
                     }
-                    self.notifications
-                        .notify(NotificationType::Error, failure.message.clone());
+                    // A known non-graphical object that cannot be read is nothing to recover
+                    // from: a warning, not an error, so it is not counted among the recovered
+                    // errors either.
+                    let level = if failure.known_nongraphical {
+                        NotificationType::Warning
+                    } else {
+                        NotificationType::Error
+                    };
+                    self.notifications.notify(level, failure.message.clone());
                     let mut diagnostic =
                         ReadDiagnostic::new(failure.code, ReadStage::RecordStream, failure.message);
                     diagnostic.source_offset = Some(failure.offset as u64);
@@ -3398,6 +3435,7 @@ impl DwgDocumentBuilder {
             skipped_records: skipped_catalog
                 .saturating_add(skipped_pass1 as usize)
                 .saturating_add(skipped_pass2 as usize),
+            known_nongraphical_records: known_nongraphical,
             diagnostics,
             cancelled: false,
         }
@@ -7438,6 +7476,42 @@ impl DwgDocumentBuilder {
         )
     }
 
+    /// Objects that never draw anything and that a viewer has no use for: the VBA project, the
+    /// solid-history objects (`ACSH_*`), associative constraint groups and plane-surface action
+    /// bodies, break data, and the complex line-style definitions (`LSDEFINITION`,
+    /// `LSSTROKEPATTERNCOMPONENT`; Plan 4 decodes the line styles, the rest nothing needs). When
+    /// one of them cannot be decoded it is not a lost drawing record (fork patch P3).
+    fn is_known_nongraphical(
+        class_names: &ClassNames,
+        raw_type_code: i16,
+        type_code: i16,
+    ) -> bool {
+        if raw_type_code == OBJ_VBA_PROJECT {
+            return true;
+        }
+        let Some(name) = class_names
+            .dxf
+            .get(&raw_type_code)
+            .or_else(|| class_names.dxf.get(&type_code))
+        else {
+            return false;
+        };
+        // The class table spells names in any case and sometimes with stray characters.
+        let name: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        matches!(
+            name.as_str(),
+            "LSDEFINITION"
+                | "LSSTROKEPATTERNCOMPONENT"
+                | "BREAKDATA"
+                | "ACDBASSOC2DCONSTRAINTGROUP"
+                | "ACDBASSOCPLANESURFACEACTIONBODY"
+        ) || name.starts_with("ACSH_")
+    }
+
     /// Validate framing and common metadata independently of the failed payload.
     fn recover_auxiliary_object(
         &self,
@@ -7490,7 +7564,13 @@ impl DwgDocumentBuilder {
             .dxf
             .get(&raw_type_code)
             .cloned()
-            .unwrap_or_else(|| format!("DWG_OBJ_{}", raw_type_code))
+            .unwrap_or_else(|| {
+                if raw_type_code == OBJ_VBA_PROJECT {
+                    "VBA_PROJECT".to_string()
+                } else {
+                    format!("DWG_OBJ_{}", raw_type_code)
+                }
+            })
     }
 }
 
