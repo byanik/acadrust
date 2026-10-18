@@ -870,16 +870,26 @@ impl DwgBitReader {
             }
         } else {
             // Pre-R2007: BS length + encoded bytes
-            let length = self.read_bit_short();
-            if length <= 0 {
-                return String::new();
-            }
-            let bytes = self.read_bytes(length as usize);
-            let (decoded, _, _) = self.encoding.decode(&bytes);
-            // Legacy strings may embed CIF \U+XXXX escapes for characters
-            // outside the code page — decode them into Unicode chars.
-            crate::io::dxf::code_page::decode_legacy_escapes(&decoded.replace('\0', ""))
+            self.read_code_page_text()
         }
+    }
+
+    /// Read text in the pre-R2007 form whatever the file version: BS length, then that many
+    /// bytes in the document's code page (the length counts the terminating NUL).
+    ///
+    /// R2007+ text normally lives in the text stream as UTF-16 (`read_variable_text`); a few
+    /// writers put 8-bit text inline in the main stream even there (see `read_en_color`).
+    /// A length beyond the bytes left flags the stream as truncated and reads nothing.
+    pub fn read_code_page_text(&mut self) -> String {
+        let length = self.read_bit_short();
+        if length <= 0 {
+            return String::new();
+        }
+        let bytes = self.read_bytes(length as usize);
+        let (decoded, _, _) = self.encoding.decode(&bytes);
+        // Legacy strings may embed CIF \U+XXXX escapes for characters
+        // outside the code page — decode them into Unicode chars.
+        crate::io::dxf::code_page::decode_legacy_escapes(&decoded.replace('\0', ""))
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -976,6 +986,26 @@ impl DwgBitReader {
                     // ACI color index (lower 12 bits)
                     Color::from_index((size & 0x0FFF) as i16)
                 };
+
+                // Patch P1: a colour-book colour with flag bit 0x0200 set carries its names
+                // inline: the colour name first when bit 0x0100 is set too, then the book name,
+                // each as 8-bit code-page text (BS length + bytes) in the main stream, in every
+                // format including R2007+ (the CMC colour byte's &1 and &2). Five public
+                // drawings are written that way, with 0xC300 and no AcDbColor object for the
+                // handle; unread, the two names were taken for the line style scale and the
+                // flags after it and the whole record slid. Bit 0x0200 is the discriminator
+                // because the low bits also hold the ACI fallback index, 0 to 257 (ByLayer 256
+                // and None 257 set 0x0100, the fork's own writer emits 0xC100 and 0xC101); no
+                // ACI value reaches 0x0200, and every other drawing seen has 0xC0 plus an index
+                // below 256. The names are not kept: the viewer draws the colour through the ACI
+                // index or the handle. How they sit relative to a transparency BL has no
+                // sample; they are read first.
+                if is_book_color && (flags & 0x0200) > 0 {
+                    if (flags & 0x0100) > 0 {
+                        let _ = self.read_code_page_text();
+                    }
+                    let _ = self.read_code_page_text();
+                }
 
                 // 0x2000: transparency (BL) — read AFTER the rgb/color-book
                 // value, matching the entity ENC field order.

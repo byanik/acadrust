@@ -565,6 +565,11 @@ path = "tests/hardening_f3_decode.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "hardening_p1_line_decode"
+path = "tests/hardening_p1_line_decode.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "hardening_f15_f18_f4"
 path = "tests/hardening_f15_f18_f4.rs"
 required-features = ["writers"]

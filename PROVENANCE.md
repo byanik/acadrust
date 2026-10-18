@@ -74,6 +74,7 @@ commits one by one, in order.
 | F1 | acadrust(F1): box ParsedEntry table variants | src/io/dwg/dwg_document_builder.rs; Cargo.toml; tests/hardening_viewer_mem.rs | The spike patch bellek-yarilama.diff hunks 1–5, re-applied by hand; OBJ_VPENT_HDR in the merged F3 form (spike §3.1) | tests/hardening_viewer_mem.rs::f1_appid_heavy_read_has_no_huge_single_allocation + compile-time size assert |
 | F2' | acadrust(F2): viewer option to skip bulky XRecords and ProxyObjects | src/io/limits.rs; src/io/dwg/dwg_reader.rs; src/io/dwg/dwg_document_builder.rs; tests/hardening_viewer_mem.rs | This fork; spike hunks 6–7 reworked: DwgReadOptions field instead of ACADRUST_SKIP_BULKY_OBJECTS, small XRecords kept (gaps §0.5); an XRecord whose entries could not be decoded completely is measured by its raw data | tests/hardening_viewer_mem.rs::f2_viewer_mode_drops_bulky_xrecords_but_keeps_scales_and_overrides; src/io/limits.rs::hardening_tests |
 | F13 | acadrust(F13): viewer option to drop EntityCommon::raw_record | src/io/limits.rs; src/io/dwg/dwg_document_builder.rs; tests/hardening_viewer_mem.rs | This fork, new code (gaps C2) | tests/hardening_viewer_mem.rs::f13_drop_raw_records_keeps_graphic_data |
+| P1 | acadrust(P1): read the inline names of a colour-book entity colour | src/io/dwg/dwg_stream_readers/bit_reader.rs; Cargo.toml; tests/hardening_p1_line_decode.rs; PROVENANCE.md | This fork, new code; layout re-derived from ODA spec 2.11 and bit traces of five public drawings (see "P1 provenance"); LibreDWG consulted: no | tests/hardening_p1_line_decode.rs |
 
 ## Limits (H2, H3)
 
@@ -143,3 +144,21 @@ Interactions:
 
 - Upstream issues to file (not done here; no remote is used): the compound-object-id payload (#135)
   and the R2007+ VX flags.
+
+## P1 provenance
+
+Five public encoding-test drawings (R2004, R2007 twice, R2013 twice, all from the LibreCAD and
+libdxfrw test data) lost two of their three LINE records to `record-decode-failed` (type 19,
+"Truncated DWG stream"). **LibreDWG consulted: no** (no source or spec file read). Its `dwgread`
+command-line tool was run on the same files as a black-box oracle (entity counts and the LINE
+coordinates of the output only), as `cf parity` does. The layout was found from the bit trace of
+the failing records (aggregate facts only; the drawings are not part of this repository).
+
+| Item | Finding |
+|---|---|
+| Where | The entity colour (ENC, ODA spec 2.11) of the two lost lines: BS `0xC300`, i.e. flags `0x8000` and `0x4000` (book colour, AcDbColor handle in the handle stream, no RGB long) plus `0x0300`. The third line of each drawing has a true colour with transparency (`0xA100`) and decoded all along |
+| What follows the BS | Two texts in the main stream, each BS length (the NUL counts) plus bytes in the document code page: the colour name (`Entry`, `Linked`) and the book name (`Book`). They are inline 8-bit text in R2004, R2007 and R2013 alike: the R2007+ text stream is empty (its flag bit is 0), and no AcDbColor object exists in the file |
+| Evidence | Read as the line style scale, the next fields slid and the LINE's first coordinate was requested 14 to 22 bits before the end of the data. With the two texts consumed, every field of the preamble lands (line weight 29, layer and book handles at the end of the handle stream) and the coordinates are the oracle's, (5, 6)-(7, 8) and (9, 10)-(11, 12), with the data ending on the padding that precedes the handle stream |
+| Rule | Colour-book colour (`0x4000`) with bit `0x0200` set: the colour name (only when bit `0x0100` is set too) and then the book name follow, each as BS length plus bytes (the `&1` / `&2` convention of the CMC colour byte), before a transparency long if any. The discriminator is `0x0200` because the low bits hold the ACI fallback index, 0 to 257: ByLayer (256) and None (257) set `0x0100`, and the fork's own writer emits `0xC100` and `0xC101` for such book colours (upstream's issue 132 tests failed on a first version of the rule that tested `0x0100`). No ACI value reaches `0x0200`. Every other drawing seen (59 local and 1,403 public ones, except the few above 120 MB; 8 book-colour flag patterns, `0xC007` to `0xC0FE`) has `0xC0` plus an index below 256 |
+| Not observed | A book colour with only bit `0x0200`, or together with transparency: the book-name-only reading and the order (names before the transparency long) are the CMC order, with no sample behind them. The five drawings have both bits |
+| Not fixed | In the same drawings the table control objects (BLOCK_CONTROL and, in one file, the other control objects) store the whole record length as the main size, leaving no handle stream, so their common data fails and the file reports `record-decode-failed` for types 48 to 68. No entity is lost by it (the block records and all three lines decode), and the header variables of two of the drawings fail to decode too. Both are the same writer's deviations and stay open |
