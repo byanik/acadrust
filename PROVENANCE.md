@@ -1,4 +1,4 @@
-# acadrust fork: provenance
+# acadrust (hardened fork): provenance
 
 This directory is a hardened fork of acadrust. Every change to it is one commit that
 touches only `Core/third_party/acadrust/` (checked by `Core/scripts/check-fork-hygiene.sh`)
@@ -46,6 +46,7 @@ Commit `vendor(acadrust): import pristine 0.6.4 (LF-normalised, ODA PDF excluded
 One row per patch commit, in commit order. "Commit" is the subject line (`git log --grep`
 finds it). Origin says where the change came from; LibreDWG (GPL) is never consulted.
 Corrections to the documents themselves are `vendor(acadrust):` commits and carry no row.
+So are renames that change no behaviour (test file names, fixture directories, comments).
 `Core/scripts/fork-export.sh --verify` compares these rows with the `acadrust(<ID>):`
 commits one by one, in order.
 
