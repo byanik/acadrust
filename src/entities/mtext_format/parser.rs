@@ -411,18 +411,37 @@ impl MTextParser {
                 self.pos += 1;
             }
 
-            // Unicode escape: \U+XXXX
+            // Unicode escape: \U+XXXX, exactly four hex digits (CIF). A high surrogate
+            // followed by a low-surrogate escape is one scalar. Decoded by the same
+            // function the readers use, so both agree; a malformed escape stays literal.
             'U' if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '+' => {
-                self.pos += 2; // skip \U+
-                let start = self.pos;
-                while self.pos < self.chars.len() && self.chars[self.pos].is_ascii_hexdigit() {
-                    self.pos += 1;
-                }
-                let hex: String = self.chars[start..self.pos].iter().collect();
-                if let Ok(code_point) = u32::from_str_radix(&hex, 16) {
-                    if let Some(ch) = char::from_u32(code_point) {
-                        self.text_buf.push(ch);
+                let hex4 = |at: usize| {
+                    at + 4 <= self.chars.len()
+                        && self.chars[at..at + 4].iter().all(|c| c.is_ascii_hexdigit())
+                };
+                let first = self.pos + 2; // first hex digit after `\U+`
+                if hex4(first) {
+                    let mut end = first + 4;
+                    let high: String = self.chars[first..end].iter().collect();
+                    let is_high = u16::from_str_radix(&high, 16)
+                        .map_or(false, |u| (0xD800..0xDC00).contains(&u));
+                    if is_high
+                        && end + 3 <= self.chars.len()
+                        && self.chars[end] == '\\'
+                        && self.chars[end + 1] == 'U'
+                        && self.chars[end + 2] == '+'
+                        && hex4(end + 3)
+                    {
+                        end += 7;
                     }
+                    let token: String = self.chars[self.pos - 1..end].iter().collect();
+                    self.text_buf
+                        .push_str(&crate::io::dxf::code_page::decode_cif_escapes(&token));
+                    self.pos = end;
+                } else {
+                    self.text_buf.push('\\');
+                    self.text_buf.push(code);
+                    self.pos += 1;
                 }
             }
 
@@ -1806,6 +1825,30 @@ mod tests {
     fn test_parse_unicode_escape() {
         let doc = parse_mtext(r"{\U+00B0}", false);
         assert_eq!(doc.paragraphs[0].to_plain_text(), "°");
+    }
+
+    #[test]
+    fn test_parse_unicode_escape_takes_exactly_four_hex_digits() {
+        // "°C": the C after the four digits is text, not a fifth digit
+        assert_eq!(parse_mtext(r"25\U+00B0C", false).to_plain_text(), "25°C");
+        assert_eq!(parse_mtext(r"\U+00412", false).to_plain_text(), "A2");
+        assert_eq!(parse_mtext(r"\U+0130STANBUL", false).to_plain_text(), "İSTANBUL");
+    }
+
+    #[test]
+    fn test_parse_malformed_unicode_escape_stays_literal() {
+        for text in [r"\U+ZZZZ", r"\U+12", r"\U+", r"\U+12G4", r"\U++041", r"a\U+ZZZZb"] {
+            assert_eq!(parse_mtext(text, false).to_plain_text(), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn test_parse_unicode_escape_surrogates_match_the_reader() {
+        // a pair is one scalar; a lone surrogate is dropped, as decode_cif_escapes does
+        assert_eq!(parse_mtext(r"\U+D83D\U+DE00", false).to_plain_text(), "😀");
+        assert_eq!(parse_mtext(r"a\U+D800b", false).to_plain_text(), "ab");
+        assert_eq!(parse_mtext(r"\U+D83D\U+0041", false).to_plain_text(), "A");
+        assert_eq!(parse_mtext(r"\U+DE00", false).to_plain_text(), "");
     }
 
     #[test]

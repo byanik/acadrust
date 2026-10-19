@@ -357,6 +357,10 @@ pub fn decode_cif_escapes(text: &str) -> String {
         if start + 4 > len {
             return None;
         }
+        // `from_str_radix` alone would also take a leading `+` (`\U++041` -> 'A').
+        if !chars[start..start + 4].iter().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
         let hex: String = chars[start..start + 4].iter().collect();
         u16::from_str_radix(&hex, 16).ok()
     };
@@ -536,6 +540,9 @@ mod tests {
         assert_eq!(decode_cif_escapes("\\U+D800"), "");
         // Surrogate pair combines into a scalar.
         assert_eq!(decode_cif_escapes("\\U+D83D\\U+DE00"), "😀");
+        // Four hex digits, no sign: `from_str_radix` alone would accept "+041".
+        assert_eq!(decode_cif_escapes("\\U++041"), "\\U++041");
+        assert_eq!(decode_cif_escapes("\\U+-041"), "\\U+-041");
     }
 
     #[test]
