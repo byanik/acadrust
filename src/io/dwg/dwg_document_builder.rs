@@ -1731,6 +1731,33 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── TrueType typeface from `ACAD` EED (STYLE) ──
+        // The typeface lives in the field from here on; its EED block is
+        // dropped so a save writes the field back instead of the stale blob.
+        // This fork (S1): decoded before Pass 2, not in a post-pass after it,
+        // so an entity visitor sees the same text styles as a full read.
+        if let Some(acad) = document.app_ids.get("ACAD").map(|a| a.handle.value()) {
+            let handles: Vec<Handle> = document.text_styles.iter().map(|s| s.handle).collect();
+            for handle in handles {
+                let Some(blocks) = document.eed_by_handle.get_mut(&handle) else {
+                    continue;
+                };
+                let Some(index) = blocks.iter().position(|(app, _)| *app == acad) else {
+                    continue;
+                };
+                let Some((typeface, flags)) =
+                    crate::io::dwg::typeface_eed::decode(&blocks[index].1, eed_is_wide)
+                else {
+                    continue;
+                };
+                blocks.remove(index);
+                if let Some(style) = document.text_styles.iter_mut().find(|s| s.handle == handle) {
+                    style.true_type_font = typeface;
+                    style.true_type_font_flags = flags;
+                }
+            }
+        }
+
         // Build a reverse map: entity_handle → block_record_handle
         // from the canonical entity_handles (R2004+). R13-R2000 chains
         // are resolved after Pass 2 supplies their entity links below.
@@ -2884,31 +2911,7 @@ impl DwgDocumentBuilder {
                 }
             }
         }
-        // ── TrueType typeface from `ACAD` EED (STYLE) ──
-        // The typeface lives in the field from here on; its EED block is
-        // dropped so a save writes the field back instead of the stale blob.
-        if let Some(acad) = document.app_ids.get("ACAD").map(|a| a.handle.value()) {
-            let wide = self.obj_reader.version().r2007_plus();
-            let handles: Vec<Handle> = document.text_styles.iter().map(|s| s.handle).collect();
-            for handle in handles {
-                let Some(blocks) = document.eed_by_handle.get_mut(&handle) else {
-                    continue;
-                };
-                let Some(index) = blocks.iter().position(|(app, _)| *app == acad) else {
-                    continue;
-                };
-                let Some((typeface, flags)) =
-                    crate::io::dwg::typeface_eed::decode(&blocks[index].1, wide)
-                else {
-                    continue;
-                };
-                blocks.remove(index);
-                if let Some(style) = document.text_styles.iter_mut().find(|s| s.handle == handle) {
-                    style.true_type_font = typeface;
-                    style.true_type_font_flags = flags;
-                }
-            }
-        }
+        // (The STYLE TrueType typeface is decoded right after Pass 1: fork patch S1.)
         if perf {
             eprintln!(
                 "[perf] dwg-build annotative={:.1}ms",

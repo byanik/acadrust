@@ -584,6 +584,11 @@ name = "hardening_viewer_mem"
 path = "tests/hardening_viewer_mem.rs"
 required-features = ["writers"]
 
+[[test]]
+name = "hardening_s1_style_typeface"
+path = "tests/hardening_s1_style_typeface.rs"
+required-features = ["writers"]
+
 [dependencies.anyhow]
 version = "1.0"
 
