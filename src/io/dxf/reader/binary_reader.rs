@@ -115,13 +115,13 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
         if self.str_buf.last() == Some(&0) {
             self.str_buf.pop();
         }
-        // Try UTF-8 first (borrow check), then fall back to lossy conversion
+        // The declared encoding, else UTF-8 with a Windows-1252 fallback (as the text reader)
         let s = if let Some(encoding) = self.encoding {
             encoding.decode(&self.str_buf).0.into_owned()
         } else {
             match std::str::from_utf8(&self.str_buf) {
                 Ok(s) => s.to_owned(),
-                Err(_) => String::from_utf8_lossy(&self.str_buf).into_owned(),
+                Err(_) => crate::io::dxf::code_page::decode_undeclared_fallback(&self.str_buf),
             }
         };
         self.str_buf.clear(); // keep the allocation for reuse
@@ -272,5 +272,27 @@ impl<R: Read + Seek> DxfStreamReader for DxfBinaryReader<R> {
 
     fn diagnostic_context(&self) -> DxfStreamContext {
         self.context.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_undeclared_non_utf8_string_decodes_as_windows_1252() {
+        // R12 binary DXF (single-byte codes), no $DWGCODEPAGE: UTF-8 first, otherwise the
+        // Windows-1252 system code page, never lossy UTF-8
+        let mut data = BINARY_SENTINEL.to_vec();
+        data.extend_from_slice(b"\x00SECTION\x00");
+        data.extend_from_slice(b"\x01\x92\x80\xD0\x00");
+        data.extend_from_slice(b"\x01\xC4\x9E\x00");
+        let mut reader = DxfBinaryReader::new(BufReader::new(Cursor::new(data))).unwrap();
+        assert_eq!(reader.read_pair().unwrap().unwrap().value_string, "SECTION");
+        let pair = reader.read_pair().unwrap().unwrap();
+        assert_eq!(pair.value_string, "\u{2019}\u{20AC}\u{D0}");
+        let pair = reader.read_pair().unwrap().unwrap();
+        assert_eq!(pair.value_string, "\u{11E}");
     }
 }

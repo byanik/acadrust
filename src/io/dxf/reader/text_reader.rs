@@ -11,7 +11,7 @@ pub struct DxfTextReader<R: Read + Seek> {
     line_number: usize,
     stream_offset: u64,
     peeked_pair: Option<DxfCodePair>,
-    /// Declared legacy encoding. `None` uses UTF-8 with Latin-1 fallback.
+    /// Declared legacy encoding. `None` uses UTF-8 with a Windows-1252 fallback.
     encoding: Option<LegacyEncoding>,
     /// Reusable buffer for line reading to avoid per-line allocation.
     line_buf: Vec<u8>,
@@ -33,8 +33,8 @@ impl<R: Read + Seek> DxfTextReader<R> {
     }
 
     /// Read a single line from the stream into a new String, handling non-UTF8
-    /// bytes gracefully.  Uses the configured encoding for fallback, or Latin-1
-    /// if none set.
+    /// bytes gracefully.  Uses the configured encoding, or UTF-8 with a Windows-1252
+    /// fallback if none set.
     fn read_line(&mut self) -> Result<Option<String>> {
         // Reuse a temporary buffer from line_buf to avoid per-line Vec allocation.
         // We must swap it out because read_line_raw also uses line_buf.
@@ -70,7 +70,7 @@ impl<R: Read + Seek> DxfTextReader<R> {
                 }
                 Err(e) => {
                     let bytes = e.into_bytes();
-                    let result = bytes.iter().map(|&b| b as char).collect();
+                    let result = crate::io::dxf::code_page::decode_undeclared_fallback(&bytes);
                     self.line_buf = bytes; // reclaim Vec allocation
                     result
                 }
@@ -252,6 +252,17 @@ mod tests {
         let pair = reader.read_pair().unwrap().unwrap();
         assert_eq!(pair.code, 0);
         assert_eq!(pair.value_string, "SECTION");
+    }
+
+    #[test]
+    fn test_undeclared_non_utf8_value_decodes_as_windows_1252() {
+        // no $DWGCODEPAGE: UTF-8 first, otherwise the Windows-1252 system code page
+        let data: &[u8] = b"1\n\x92\x80\xD0\n1\n\xC4\x9E\n";
+        let mut reader = DxfTextReader::new(BufReader::new(Cursor::new(data))).unwrap();
+        let pair = reader.read_pair().unwrap().unwrap();
+        assert_eq!(pair.value_string, "\u{2019}\u{20AC}\u{D0}");
+        let pair = reader.read_pair().unwrap().unwrap();
+        assert_eq!(pair.value_string, "\u{11E}");
     }
 
     #[test]

@@ -444,6 +444,18 @@ pub fn decode_mif_escapes(text: &str) -> String {
     out
 }
 
+/// Decodes text that is not valid UTF-8 in a DXF that declares no code page (a pre-R2007 file
+/// without `$DWGCODEPAGE`): Windows-1252, the system code page AutoCAD falls back to on the
+/// Western systems that write such files. Every byte maps to a character, so nothing becomes
+/// U+FFFD, and 0x80-0x9F give the Windows-1252 punctuation (`’`, `€`, `–`) rather than C1
+/// controls. The DXF readers try UTF-8 first and call this only when that fails.
+pub(crate) fn decode_undeclared_fallback(bytes: &[u8]) -> String {
+    encoding_rs::WINDOWS_1252
+        .decode_without_bom_handling(bytes)
+        .0
+        .into_owned()
+}
+
 pub fn has_legacy_escape(text: &str) -> bool {
     text.contains("\\U+") || text.contains("\\M+")
 }
