@@ -1179,14 +1179,28 @@ impl MTextParser {
             return None;
         }
 
+        // Only an optional sign and digits can parse, so the scan stops at the first other
+        // character: a value that is not a number is rewound after a few characters instead
+        // of after a scan to the next `;` (which made repeated `\C` codes quadratic).
         let start = self.pos;
-        let value = self.parse_semicolon_value();
-
-        if let Ok(n) = value.parse::<i32>() {
-            Some(n)
-        } else {
-            self.pos = start;
-            None
+        let mut end = start;
+        if end < self.chars.len() && matches!(self.chars[end], '+' | '-') {
+            end += 1;
+        }
+        while end < self.chars.len() && self.chars[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end < self.chars.len() && self.chars[end] != ';' {
+            return None; // not a number up to `;`: nothing consumed
+        }
+        let value: String = self.chars[start..end].iter().collect();
+        match value.parse::<i32>() {
+            Ok(n) => {
+                // consume the value and its `;`
+                self.pos = if end < self.chars.len() { end + 1 } else { end };
+                Some(n)
+            }
+            Err(_) => None,
         }
     }
 }
@@ -1322,6 +1336,30 @@ mod tests {
             "flags lost: {out}"
         );
         assert_eq!(parse_mtext(&out, false).to_mtext_string(), out);
+    }
+
+    #[test]
+    fn test_parse_numeric_code_value_semantics() {
+        // a value is a signed integer up to `;`; anything else is not consumed
+        let doc = parse_mtext(r"\C5;x", false);
+        assert_eq!(doc.paragraphs[0].spans[0].properties.color, Some(MTextColor::Index(5)));
+        assert_eq!(doc.to_plain_text(), "x");
+        assert_eq!(parse_mtext(r"\C5x;y", false).to_plain_text(), "5x;y");
+        assert_eq!(parse_mtext(r"\C+7;z", false).to_plain_text(), "z");
+        assert_eq!(parse_mtext(r"\C-;w", false).to_plain_text(), "-;w");
+        assert_eq!(parse_mtext(r"\C12", false).to_plain_text(), "");
+        assert_eq!(parse_mtext(r"\C99999999999;v", false).to_plain_text(), "99999999999;v");
+    }
+
+    #[test]
+    fn test_parse_numeric_code_values_take_linear_time() {
+        // every `\C` without its `;` used to scan to the end of the input and rewind:
+        // 32,768 of them took seconds; linear parsing takes milliseconds
+        let input = "\\C".repeat(32_768);
+        let start = std::time::Instant::now();
+        let doc = parse_mtext(&input, false);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+        assert!(doc.to_plain_text().is_empty());
     }
 
     #[test]
