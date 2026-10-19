@@ -498,9 +498,16 @@ impl MTextParser {
                 self.current_paragraph.starts_column = true;
             }
 
-            // Wrap at dimension line (skip, no output)
+            // Wrap at the dimension line: what follows goes on the next line (dimension
+            // text below the line). A break like `\P` whose new paragraph keeps the
+            // current paragraph's properties, since the paragraph itself continues.
             'X' => {
                 self.pos += 1;
+                self.flush_current_span(false);
+                let properties = self.current_paragraph.properties.clone();
+                self.document
+                    .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                self.current_paragraph.properties = properties;
             }
 
             // ── Stroke decorations ──
@@ -1360,6 +1367,27 @@ mod tests {
         let doc = parse_mtext(&input, false);
         assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
         assert!(doc.to_plain_text().is_empty());
+    }
+
+    #[test]
+    fn test_parse_dimension_line_wrap_breaks_the_line() {
+        // `\X` puts what follows on the next line (dimension text below the dimension line);
+        // it used to be dropped, so "25\X+0.1" read as "25+0.1" on one line
+        let doc = parse_mtext(r"25\X+0.1", false);
+        assert_eq!(doc.paragraphs.len(), 2);
+        assert_eq!(doc.paragraphs[0].to_plain_text(), "25");
+        assert_eq!(doc.paragraphs[1].to_plain_text(), "+0.1");
+        assert!(!doc.paragraphs[1].starts_column);
+        assert_eq!(doc.to_plain_text(), "25\n+0.1");
+        // span properties carry over, as with `\P`
+        let doc = parse_mtext(r"\C1;a\Xb", false);
+        assert_eq!(doc.paragraphs[1].spans[0].properties.color, Some(MTextColor::Index(1)));
+        // the paragraph's own properties continue on the new line
+        let doc = parse_mtext(r"\pxqc;a\Xb", false);
+        assert_eq!(
+            doc.paragraphs[1].properties.alignment,
+            Some(MTextParagraphAlignment::Center)
+        );
     }
 
     #[test]

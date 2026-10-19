@@ -16,7 +16,7 @@
 //! |------|-------------|
 //! | `\P` | Paragraph break |
 //! | `\N` | New column break |
-//! | `\X` | Wrap at dimension line |
+//! | `\X` | Line break at the dimension line (a paragraph break that keeps the paragraph's properties) |
 //! | `\~` | Non-breaking space |
 //! | `\U+XXXX` | Unicode escape |
 //! | `\L` / `\l` | Underline on / off |
