@@ -160,6 +160,11 @@
 // This fork (F16): without the `writers` feature the encode-side helpers
 // that only the DWG/DXF writers call stay compiled but unused.
 #![cfg_attr(not(feature = "writers"), allow(dead_code, unused_imports))]
+// This fork (Z1): the single-record decode entry exists only with the `fuzzing` feature.
+#![cfg_attr(
+    not(feature = "fuzzing"),
+    doc = "\n\nWithout the `fuzzing` feature there is no `fuzzing` module (fork patch Z1):\n\n```compile_fail\nlet _ = acadrust::fuzzing::decode_object;\n```"
+)]
 
 pub mod classes;
 pub mod compound_file;
@@ -170,6 +175,8 @@ pub mod nested_copy;
 pub mod entities;
 pub mod error;
 pub mod fields;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod io;
 pub mod layer_state;
 pub mod notification;

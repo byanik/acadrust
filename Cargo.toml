@@ -42,6 +42,7 @@ repository = "https://github.com/hakanaktt/acadrust"
 default = []
 import = ["dep:quick-xml"]
 writers = []
+fuzzing = []
 serde = [
     "dep:serde",
     "bitflags/serde",
@@ -593,6 +594,11 @@ required-features = ["writers"]
 name = "hardening_l1_mlinestyle"
 path = "tests/hardening_l1_mlinestyle.rs"
 required-features = ["writers"]
+
+[[test]]
+name = "hardening_z1_record"
+path = "tests/hardening_z1_record.rs"
+required-features = ["fuzzing"]
 
 [dependencies.anyhow]
 version = "1.0"

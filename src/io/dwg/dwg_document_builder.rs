@@ -7683,6 +7683,82 @@ mod tests {
     }
 }
 
+/// Decodes one framed object record (MS size, R2010+ MC handle bits, merged data, CRC) through
+/// the pass-2 dispatch of a full read, with an empty context and the given class table
+/// (`(class number, DXF name, is an entity)`), as code `raw_type_code` whatever the record's own
+/// type prefix says. No `catch_unwind`: a decoder panic escapes (fork patch Z1, fuzzing only).
+/// `true` when the record decoded without a reader error and the builder kept an entity of it
+/// (`entity`) or an object of it (otherwise).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn decode_one_record(
+    version: crate::types::DxfVersion,
+    frame: &[u8],
+    raw_type_code: i16,
+    entity: bool,
+    classes: &[(i16, &str, bool)],
+) -> bool {
+    let Ok(obj_reader) = DwgObjectReader::new(frame.to_vec(), version, HashMap::new()) else {
+        return false;
+    };
+    // The record's own handle, which the dispatch checks an entity against.
+    let Ok((_, mut probe)) = obj_reader.read_record_at(0) else {
+        return false;
+    };
+    if obj_reader.version().r2000_plus() && !obj_reader.version().r2007_plus() {
+        let _ = probe.read_raw_long();
+    }
+    let handle = probe.main_mut().read_handle();
+    if probe.check_error().is_err() {
+        return false;
+    }
+    let Ok((_, mut reader)) = obj_reader.read_record_at(0) else {
+        return false;
+    };
+    let names: HashMap<i16, String> = classes
+        .iter()
+        .map(|&(number, name, _)| (number, name.to_string()))
+        .collect();
+    let class_names = ClassNames {
+        cpp: names.clone(),
+        dxf: names,
+    };
+    let class_map: HashMap<i16, i16> = classes
+        .iter()
+        .filter_map(|&(number, name, _)| dxf_name_to_type_code(name).map(|code| (number, code)))
+        .collect();
+    let entity_class_numbers: HashSet<i16> = classes
+        .iter()
+        .filter(|&&(_, _, entity)| entity)
+        .map(|&(number, _, _)| number)
+        .collect();
+    let type_code = DwgDocumentBuilder::resolve_type_code(raw_type_code, &class_map);
+    let mut builder = DwgDocumentBuilder::new(obj_reader);
+    builder.viewer.drop_raw_records = true;
+    let mut output = Pass2Output::new(version, Handle::from(1), Handle::from(2), 1);
+    let maps = HandleMaps::new();
+    let mut pending = PendingPolylines::default();
+    let mut pending_attributes = HashMap::new();
+    builder.process_pass2_record(
+        handle,
+        raw_type_code,
+        type_code,
+        &mut reader,
+        &mut output,
+        &maps,
+        &mut pending,
+        &mut pending_attributes,
+        &entity_class_numbers,
+        &class_names,
+        false,
+    );
+    let kept = if entity {
+        !output.entities.is_empty()
+    } else {
+        !output.objects.is_empty()
+    };
+    reader.check_error().is_ok() && kept
+}
+
 fn read_registered_payload(
     reader: &mut crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader,
     current_handle: u64,
