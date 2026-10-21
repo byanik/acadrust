@@ -20599,6 +20599,15 @@ impl<'a> SectionReader<'a> {
                 }
                 2 => style.name = pair.value_string.clone(),
                 3 => style.description = pair.value_string.clone(),
+                // Fill, joints and the cap bits, in the DXF bit values (the
+                // DWG stream swaps some pairs; its reader maps them). Fork
+                // patch L1: the flags were dropped, so every DXF style read
+                // without fill, joints or caps.
+                70 => {
+                    if let Some(v) = pair.as_i32() {
+                        style.flags = crate::objects::MLineStyleFlags::from_bits(v);
+                    }
+                }
                 // DXF stores MLINESTYLE angles in degrees; the model stores
                 // radians (the DWG stream and the DXF writer both use
                 // radians/degrees respectively). Reading them raw made every

@@ -589,6 +589,11 @@ name = "hardening_s1_style_typeface"
 path = "tests/hardening_s1_style_typeface.rs"
 required-features = ["writers"]
 
+[[test]]
+name = "hardening_l1_mlinestyle"
+path = "tests/hardening_l1_mlinestyle.rs"
+required-features = ["writers"]
+
 [dependencies.anyhow]
 version = "1.0"
 
