@@ -1,3 +1,16 @@
+//! The layouts follow the records of the public drawings (fork patch L1; bit traces, aggregates
+//! only; LibreDWG consulted: no):
+//!
+//! - every record: TV description (the R2007+ text stream), BL version (1), BL kind (0 for a
+//!   definition; 1 symbol, 2 compound, 3 stroke, 4 point, 6 internal);
+//! - definition: BD unit definition, BL units type (0 master, 1 UOR), BD unit scale, five B
+//!   (continuous, element, physical, scale independent, snappable), 16 bytes: the root
+//!   component's uid; handle: the root component;
+//! - component: 16 bytes uid (a version 1 GUID), BD scale, RC flags, then the kind's data;
+//! - stroke pattern: B iteration-limit flag, B single segment, BL phase mode, BL iteration
+//!   limit, BD phase, BD auto phase, BL count, per stroke five B, BD length, BD start width,
+//!   BD end width, BL cap mode, BL width mode.
+
 use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::objects::{
     DgnLineStyleData, DgnLsComponentData, DgnLsComponentType, DgnLsCompoundComponent,
@@ -6,7 +19,6 @@ use crate::objects::{
 };
 use crate::types::Handle;
 
-
 pub fn read_dgn_line_style_data(
     reader: &mut DwgMergedReader,
     dxf_name: &str,
@@ -14,28 +26,39 @@ pub fn read_dgn_line_style_data(
     let description = reader.read_variable_text();
     let version = reader.read_bit_long();
     let component_type = reader.read_bit_long();
-    let component_uid = read_uid(reader);
 
     if dxf_name.eq_ignore_ascii_case("LSDEFINITION") {
+        // Patch L1: units and flags come before the uid, and the uid is the root component's
+        // own (the corpus records end exactly there; module comment).
+        let unit_definition = reader.read_bit_double();
+        let units_type = reader.read_bit_long();
+        let unit_scale = reader.read_bit_double();
+        let is_continuous = reader.read_bit();
+        let is_element = reader.read_bit();
+        let is_physical = reader.read_bit();
+        let is_scale_independent = reader.read_bit();
+        let is_snappable = reader.read_bit();
+        let root_uid = read_uid(reader);
         return Some(DgnLineStyleData::Definition {
             description,
             version,
             style_number: component_type,
-            component_uid,
-            is_continuous: reader.read_bit(),
-            unit_definition: reader.read_bit_double(),
-            unit_scale: reader.read_bit_double(),
-            units_type: reader.read_bit_long(),
-            is_element: reader.read_bit(),
-            is_physical: reader.read_bit(),
-            is_scale_independent: reader.read_bit(),
-            is_snappable: reader.read_bit(),
+            component_uid: root_uid,
+            is_continuous,
+            unit_definition,
+            unit_scale,
+            units_type,
+            is_element,
+            is_physical,
+            is_scale_independent,
+            is_snappable,
             root_component: Handle::from(reader.read_handle()),
             properties: Vec::new(),
         });
     }
 
     let kind = DgnLsComponentType::from_code(component_type)?;
+    let component_uid = read_uid(reader);
     let scale = reader.read_bit_double();
     let property_flags = read_byte(reader);
     let component = match kind {
@@ -131,27 +154,38 @@ fn safe_count(value: i32, reader: &DwgMergedReader) -> i32 {
 }
 
 fn read_stroke_pattern(reader: &mut DwgMergedReader) -> DgnLsStrokePattern {
+    // Patch L1: the phase mode is a BL before the iteration limit, the phase before the auto
+    // phase; per stroke the cap mode before the width mode (module comment).
     let has_iteration_limit = reader.read_bit();
     let is_single_segment = reader.read_bit();
+    let phase_mode = DgnLsPhaseMode::from_value(reader.read_bit_long());
     let iteration_limit = reader.read_bit_long();
-    let auto_phase = reader.read_bit_double();
     let phase = reader.read_bit_double();
-    let phase_mode =
-        DgnLsPhaseMode::from_code(((reader.read_bit() as u8) << 1) | reader.read_bit() as u8);
+    let auto_phase = reader.read_bit_double();
     let count = safe_count(reader.read_bit_long(), reader);
     let mut strokes = Vec::with_capacity(count as usize);
     for _ in 0..count {
+        let is_dash = reader.read_bit();
+        let bypass_corner = reader.read_bit();
+        let can_be_scaled = reader.read_bit();
+        let invert_at_origin = reader.read_bit();
+        let invert_at_end = reader.read_bit();
+        let length = reader.read_bit_double();
+        let start_width = reader.read_bit_double();
+        let end_width = reader.read_bit_double();
+        let cap_mode = reader.read_bit_long();
+        let width_mode = reader.read_bit_long();
         strokes.push(DgnLsStroke {
-            is_dash: reader.read_bit(),
-            bypass_corner: reader.read_bit(),
-            can_be_scaled: reader.read_bit(),
-            invert_at_origin: reader.read_bit(),
-            invert_at_end: reader.read_bit(),
-            length: reader.read_bit_double(),
-            start_width: reader.read_bit_double(),
-            end_width: reader.read_bit_double(),
-            width_mode: reader.read_bit_long(),
-            cap_mode: reader.read_bit_long(),
+            is_dash,
+            bypass_corner,
+            can_be_scaled,
+            invert_at_origin,
+            invert_at_end,
+            length,
+            start_width,
+            end_width,
+            width_mode,
+            cap_mode,
         });
     }
     DgnLsStrokePattern {

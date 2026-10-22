@@ -7482,8 +7482,9 @@ impl DwgDocumentBuilder {
     /// Objects that never draw anything and that a viewer has no use for: the VBA project, the
     /// solid-history objects (`ACSH_*`), associative constraint groups and plane-surface action
     /// bodies, break data, and the complex line-style definitions (`LSDEFINITION`,
-    /// `LSSTROKEPATTERNCOMPONENT`; Plan 4 decodes the line styles, the rest nothing needs). When
-    /// one of them cannot be decoded it is not a lost drawing record (fork patch P3).
+    /// `LSSTROKEPATTERNCOMPONENT`; fork patch L1 decodes the line styles, they stay listed so
+    /// that one that still fails is not a lost drawing record). When one of them cannot be
+    /// decoded it is not a lost drawing record (fork patch P3).
     fn is_known_nongraphical(
         class_names: &ClassNames,
         raw_type_code: i16,

@@ -23,6 +23,8 @@ pub enum DgnLineStyleData {
         description: String,
         version: i32,
         style_number: i32,
+        /// The root component's uid (fork patch L1: a definition stores its root's uid after
+        /// its flags, not one of its own).
         component_uid: [u8; 16],
         is_continuous: bool,
         unit_definition: f64,
@@ -186,6 +188,17 @@ pub enum DgnLsPhaseMode {
 }
 
 impl DgnLsPhaseMode {
+    /// The mode a DWG record stores as a BL (fork patch L1): 0 distance, 1 fraction, 2 centred,
+    /// any other value `Reserved`.
+    pub fn from_value(value: i32) -> Self {
+        match value {
+            0 => Self::Distance,
+            1 => Self::Fraction,
+            2 => Self::Centered,
+            _ => Self::Reserved,
+        }
+    }
+
     pub fn from_code(code: u8) -> Self {
         match code & 3 {
             0 => Self::Distance,

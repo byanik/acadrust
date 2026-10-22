@@ -596,6 +596,11 @@ path = "tests/hardening_l1_mlinestyle.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "hardening_l1_dgn"
+path = "tests/hardening_l1_dgn.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "hardening_z1_record"
 path = "tests/hardening_z1_record.rs"
 required-features = ["fuzzing"]

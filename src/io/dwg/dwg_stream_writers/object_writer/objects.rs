@@ -555,18 +555,19 @@ impl<'a> DwgObjectWriter<'a> {
                 root_component,
                 ..
             } => {
+                // fork patch L1: the layout of the reader (dgn_linestyle.rs)
                 self.writer.write_variable_text(description);
                 self.writer.write_bit_long(*version);
                 self.writer.write_bit_long(*style_number);
-                self.writer.write_bytes(component_uid);
-                self.writer.write_bit(*is_continuous);
                 self.writer.write_bit_double(*unit_definition);
-                self.writer.write_bit_double(*unit_scale);
                 self.writer.write_bit_long(*units_type);
+                self.writer.write_bit_double(*unit_scale);
+                self.writer.write_bit(*is_continuous);
                 self.writer.write_bit(*is_element);
                 self.writer.write_bit(*is_physical);
                 self.writer.write_bit(*is_scale_independent);
                 self.writer.write_bit(*is_snappable);
+                self.writer.write_bytes(component_uid);
                 self.writer
                     .write_handle(DwgReferenceType::HardPointer, root_component.value());
             }
@@ -659,14 +660,13 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_dgn_stroke_pattern(&mut self, pattern: &DgnLsStrokePattern) {
+        // fork patch L1: the layout of the reader (dgn_linestyle.rs)
         self.writer.write_bit(pattern.has_iteration_limit);
         self.writer.write_bit(pattern.is_single_segment);
+        self.writer.write_bit_long(i32::from(pattern.phase_mode.code()));
         self.writer.write_bit_long(pattern.iteration_limit);
-        self.writer.write_bit_double(pattern.auto_phase);
         self.writer.write_bit_double(pattern.phase);
-        let phase_mode = pattern.phase_mode.code();
-        self.writer.write_bit((phase_mode & 2) != 0);
-        self.writer.write_bit((phase_mode & 1) != 0);
+        self.writer.write_bit_double(pattern.auto_phase);
         self.writer.write_bit_long(pattern.strokes.len() as i32);
         for stroke in &pattern.strokes {
             self.writer.write_bit(stroke.is_dash);
@@ -677,8 +677,8 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_double(stroke.length);
             self.writer.write_bit_double(stroke.start_width);
             self.writer.write_bit_double(stroke.end_width);
-            self.writer.write_bit_long(stroke.width_mode);
             self.writer.write_bit_long(stroke.cap_mode);
+            self.writer.write_bit_long(stroke.width_mode);
         }
     }
 
