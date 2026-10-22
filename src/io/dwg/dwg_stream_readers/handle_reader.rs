@@ -86,7 +86,8 @@ pub fn read_handles(data: &[u8]) -> Result<HashMap<u64, i64>> {
 }
 
 /// Read unsigned Modular Char (MC) from byte slice.
-/// Returns (value, bytes_consumed).
+/// Returns (value, bytes_consumed). Bits past the value's 64 are dropped (H7: a corrupt map's
+/// run of continuation bytes must not shift past the width).
 fn read_mc(data: &[u8]) -> (u64, usize) {
     let mut value: u64 = 0;
     let mut shift: u32 = 0;
@@ -98,18 +99,18 @@ fn read_mc(data: &[u8]) -> (u64, usize) {
         }
         let b = data[i];
         i += 1;
-        value |= ((b & 0x7F) as u64) << shift;
+        value |= ((b & 0x7F) as u64).checked_shl(shift).unwrap_or(0);
         if (b & 0x80) == 0 {
             break;
         }
-        shift += 7;
+        shift = shift.saturating_add(7);
     }
 
     (value, i)
 }
 
 /// Read signed Modular Char (SMC) from byte slice.
-/// Returns (value, bytes_consumed).
+/// Returns (value, bytes_consumed). Bits past the value's 64 are dropped (H7).
 fn read_smc(data: &[u8]) -> (i64, usize) {
     let mut value: u64 = 0;
     let mut shift: u32 = 0;
@@ -126,17 +127,17 @@ fn read_smc(data: &[u8]) -> (i64, usize) {
 
         if (b & 0x80) == 0 {
             // Final byte: bits 0-5 = value, bit 6 = sign
-            value |= ((b & 0x3F) as u64) << shift;
+            value |= ((b & 0x3F) as u64).checked_shl(shift).unwrap_or(0);
             break;
         } else {
-            value |= ((b & 0x7F) as u64) << shift;
-            shift += 7;
+            value |= ((b & 0x7F) as u64).checked_shl(shift).unwrap_or(0);
+            shift = shift.saturating_add(7);
         }
     }
 
     let signed_value = value as i64;
     if (last_byte & 0x40) != 0 {
-        (-signed_value, i)
+        (signed_value.wrapping_neg(), i)
     } else {
         (signed_value, i)
     }
@@ -209,5 +210,35 @@ mod tests {
         assert_eq!(handles.len(), 2);
         assert_eq!(handles[&5_u64], 100_i64);
         assert_eq!(handles[&8_u64], 150_i64); // 5+3=8, 100+50=150
+    }
+
+    /// H7: a modular char longer than 64 bits (a corrupt handle map) never shifts past the
+    /// value's width: the bits beyond it are dropped and every byte up to the terminator is
+    /// consumed.
+    #[test]
+    fn modular_chars_longer_than_64_bits_do_not_overflow() {
+        let mut long = vec![0xFF_u8; 11];
+        long.push(0x01);
+        let (v, n) = read_mc(&long);
+        assert_eq!(n, 12);
+        assert_eq!(
+            v,
+            u64::MAX,
+            "the low 63 bits of the 0x7F groups and the last group's low bit"
+        );
+        let (_, n) = read_smc(&long[..]);
+        assert_eq!(n, 12);
+        // an unterminated run to the end of the data
+        let (_, n) = read_mc(&[0x80_u8; 40]);
+        assert_eq!(n, 40);
+        let (_, n) = read_smc(&[0x80_u8; 40]);
+        assert_eq!(n, 40);
+        // a negative SMC of i64::MIN's magnitude wraps instead of overflowing the negation
+        let mut min = vec![0x80_u8; 9];
+        min.push(0x41);
+        assert_eq!(read_smc(&min), (i64::MIN, 10));
+        // short values are unchanged
+        assert_eq!(read_mc(&[0x83, 0x01]), (131, 2));
+        assert_eq!(read_smc(&[0x45]), (-5, 1));
     }
 }
