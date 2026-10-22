@@ -2302,14 +2302,10 @@ impl<'a> DwgObjectWriter<'a> {
 
     // ── Object Context Data (annotative per-scale leaf) ─────────────
 
-    /// Write an `AcDb*ObjectContextData` leaf.
-    ///
-    /// The shared `AcDbObjectContextData` base and the type-specific placement
-    /// payload are always encoded from the semantic model, including objects
-    /// read from an existing file.
+    /// Write an annotative context object (fork patch A1): the mirror of
+    /// `object_reader::object_context::read_object_context`. The common object data, `BS` class
+    /// version, `B` default, the class payload; handles: the scale, then the payload's own.
     fn write_object_context_data(&mut self, obj: &ObjectContextData) {
-        // UNLISTED type — resolve the 500+ class number (registered in the
-        // default class set, so this always resolves for a synthesized object).
         let type_code = self.class_type_code(obj.class_name(), 0);
         self.write_common_non_entity_data(
             type_code,
@@ -2318,33 +2314,22 @@ impl<'a> DwgObjectWriter<'a> {
             &obj.reactors,
             &obj.xdictionary_handle,
         );
-
-        // AcDbObjectContextData base.
         self.writer.write_bit_short(obj.class_version);
         self.writer.write_bit(obj.is_default);
-
-        // AcDbAnnotScaleObjectContextData: first object-specific handle.
         self.writer
             .write_handle(DwgReferenceType::HardPointer, obj.scale.value());
-
-        // AcDb<Type>ObjectContextData placement payload (DATA stream).
         match &obj.kind {
-            ObjectContextKind::AnnotScale => {}
-            ObjectContextKind::MLeader(context) => {
-                self.write_multileader_annotation_context(context, false);
-            }
+            ObjectContextKind::AnnotScale | ObjectContextKind::Opaque => {}
             ObjectContextKind::BlkRef {
                 rotation,
                 insertion,
-                scale_factor,
+                scale,
             } => {
                 self.writer.write_bit_double(*rotation);
-                self.writer.write_bit_double(insertion.x);
-                self.writer.write_bit_double(insertion.y);
-                self.writer.write_bit_double(insertion.z);
-                self.writer.write_bit_double(scale_factor.x);
-                self.writer.write_bit_double(scale_factor.y);
-                self.writer.write_bit_double(scale_factor.z);
+                self.writer.write_3bit_double(*insertion);
+                self.writer.write_bit_double(scale.x);
+                self.writer.write_bit_double(scale.y);
+                self.writer.write_bit_double(scale.z);
             }
             ObjectContextKind::Text {
                 horizontal_mode,
@@ -2354,208 +2339,124 @@ impl<'a> DwgObjectWriter<'a> {
             } => {
                 self.writer.write_bit_short(*horizontal_mode);
                 self.writer.write_bit_double(*rotation);
-                self.writer.write_raw_double(insertion.x);
-                self.writer.write_raw_double(insertion.y);
-                self.writer.write_raw_double(alignment.x);
-                self.writer.write_raw_double(alignment.y);
+                self.writer.write_2raw_double(*insertion);
+                self.writer.write_2raw_double(*alignment);
             }
-            ObjectContextKind::MText(m) => {
-                self.writer.write_bit_long(m.attachment);
-                // Binary stores x_axis_dir BEFORE ins_pt.
-                self.writer.write_bit_double(m.x_axis_dir.x);
-                self.writer.write_bit_double(m.x_axis_dir.y);
-                self.writer.write_bit_double(m.x_axis_dir.z);
-                self.writer.write_bit_double(m.insertion.x);
-                self.writer.write_bit_double(m.insertion.y);
-                self.writer.write_bit_double(m.insertion.z);
-                self.writer.write_bit_double(m.rect_width);
-                self.writer.write_bit_double(m.rect_height);
-                self.writer.write_bit_double(m.extents_width);
-                self.writer.write_bit_double(m.extents_height);
-                self.writer.write_bit_long(m.column_type);
-                if m.column_type != 0 {
-                    if let Some(c) = &m.columns {
-                        self.writer.write_bit_long(c.num_heights);
-                        self.writer.write_bit_double(c.width);
-                        self.writer.write_bit_double(c.gutter);
-                        self.writer.write_bit(c.auto_height);
-                        self.writer.write_bit(c.flow_reversed);
-                        if !c.auto_height && m.column_type == 2 {
-                            for h in &c.heights {
-                                self.writer.write_bit_double(*h);
-                            }
-                        }
+            ObjectContextKind::MText(m) => self.write_mtext_context(m),
+            ObjectContextKind::MTextAttribute(a) => {
+                self.writer.write_bit_short(a.horizontal_mode);
+                self.writer.write_bit_double(a.rotation);
+                self.writer.write_2raw_double(a.insertion);
+                self.writer.write_2raw_double(a.alignment);
+                let embedded = a.mtext.as_ref().filter(|_| a.multiline);
+                self.writer.write_bit(embedded.is_some());
+                if let Some(e) = embedded {
+                    self.writer.write_bit_long(e.reactors.len() as i32);
+                    let has_xdict = e.xdictionary_handle.is_some_and(|h| !h.is_null());
+                    if self.version.r2004_plus() {
+                        self.writer.write_bit(!has_xdict);
                     }
-                }
-            }
-            ObjectContextKind::Dim(d) => {
-                // AcDbDimensionObjectContextData base (data stream).
-                self.writer.write_raw_double(d.def_pt.x);
-                self.writer.write_raw_double(d.def_pt.y);
-                self.writer.write_bit(d.is_def_textloc);
-                self.writer.write_bit_double(d.text_rotation);
-                self.writer.write_bit(d.b293);
-                self.writer.write_bit(d.dimtofl);
-                self.writer.write_bit(d.dimosxd);
-                self.writer.write_bit(d.dimatfit);
-                self.writer.write_bit(d.dimtix);
-                self.writer.write_bit(d.dimtmove);
-                self.writer.write_byte(d.override_code);
-                self.writer.write_bit(d.has_arrow2);
-                self.writer.write_bit(d.flip_arrow2);
-                self.writer.write_bit(d.flip_arrow1);
-                // Subtype-specific 3BD point(s).
-                let mut pt = |p: &crate::types::Vector3| {
-                    self.writer.write_bit_double(p.x);
-                    self.writer.write_bit_double(p.y);
-                    self.writer.write_bit_double(p.z);
-                };
-                match &d.subtype {
-                    DimSubtype::Aligned { dimline_pt } => pt(dimline_pt),
-                    DimSubtype::Angular { arc_pt } => pt(arc_pt),
-                    DimSubtype::Diametric {
-                        first_arc_pt,
-                        def_pt,
-                    } => {
-                        pt(first_arc_pt);
-                        pt(def_pt);
-                    }
-                    DimSubtype::Radial { first_arc_pt } => pt(first_arc_pt),
-                    DimSubtype::RadialLarge {
-                        ovr_center,
-                        jog_point,
-                    } => {
-                        pt(ovr_center);
-                        pt(jog_point);
-                    }
-                    DimSubtype::Ordinate {
-                        feature_location_pt,
-                        leader_endpt,
-                    } => {
-                        pt(feature_location_pt);
-                        pt(leader_endpt);
-                    }
-                }
-            }
-            ObjectContextKind::MTextAttribute(value) => {
-                self.writer.write_bit_short(value.horizontal_mode);
-                self.writer.write_bit_double(value.rotation);
-                self.writer.write_raw_double(value.insertion.x);
-                self.writer.write_raw_double(value.insertion.y);
-                let has_context = value.enable_context && value.context.is_some();
-                self.writer.write_raw_double(value.alignment.x);
-                self.writer.write_raw_double(value.alignment.y);
-                self.writer.write_bit(has_context);
-                if let Some(context) = value.context.as_ref().filter(|_| has_context) {
-                    // Embedded non-entity common tail. Type, handle and EED
-                    // are omitted because this object lives inline.
-                    self.writer.write_bit_long(context.reactors.len() as i32);
-                    self.writer.write_bit(context.xdictionary_handle.is_none());
                     if self.version.r2013_plus(self.dxf_version) {
-                        self.writer.write_bit(context.has_binary_data);
+                        self.writer.write_bit(e.has_ds_data);
                     }
-                    self.writer.write_bit_short(context.class_version);
-                    self.writer.write_bit(context.is_default);
-                    self.writer.write_bit_long(context.mtext.attachment);
-                    self.writer.write_bit_double(context.mtext.x_axis_dir.x);
-                    self.writer.write_bit_double(context.mtext.x_axis_dir.y);
-                    self.writer.write_bit_double(context.mtext.x_axis_dir.z);
-                    self.writer.write_bit_double(context.mtext.insertion.x);
-                    self.writer.write_bit_double(context.mtext.insertion.y);
-                    self.writer.write_bit_double(context.mtext.insertion.z);
-                    self.writer.write_bit_double(context.mtext.rect_width);
-                    self.writer.write_bit_double(context.mtext.rect_height);
-                    self.writer.write_bit_double(context.mtext.extents_width);
-                    self.writer.write_bit_double(context.mtext.extents_height);
-                    self.writer.write_bit_long(context.mtext.column_type);
-                    if context.mtext.column_type != 0 {
-                        if let Some(columns) = &context.mtext.columns {
-                            self.writer.write_bit_long(columns.num_heights);
-                            self.writer.write_bit_double(columns.width);
-                            self.writer.write_bit_double(columns.gutter);
-                            self.writer.write_bit(columns.auto_height);
-                            self.writer.write_bit(columns.flow_reversed);
-                            if !columns.auto_height && context.mtext.column_type == 2 {
-                                for height in &columns.heights {
-                                    self.writer.write_bit_double(*height);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            ObjectContextKind::Leader(value) => {
-                self.writer.write_bit_long(value.points.len() as i32);
-                for point in &value.points {
-                    self.writer.write_3bit_double(*point);
-                }
-                self.writer.write_3bit_double(value.x_direction);
-                self.writer.write_bit(value.annotation_enabled);
-                self.writer.write_3bit_double(value.insertion_offset);
-                self.writer.write_3bit_double(value.endpoint_projection);
-            }
-            ObjectContextKind::Fcf {
-                location,
-                horizontal_direction,
-            } => {
-                self.writer.write_bit_double(location.x);
-                self.writer.write_bit_double(location.y);
-                self.writer.write_bit_double(location.z);
-                self.writer.write_bit_double(horizontal_direction.x);
-                self.writer.write_bit_double(horizontal_direction.y);
-                self.writer.write_bit_double(horizontal_direction.z);
-            }
-            ObjectContextKind::HatchScale(value) => {
-                self.write_hatch_scale_context_data(value);
-            }
-            ObjectContextKind::HatchView(value) => {
-                self.write_hatch_scale_context_data(&value.hatch);
-                self.writer.write_bit_double(value.view_normal.x);
-                self.writer.write_bit_double(value.view_normal.y);
-                self.writer.write_bit_double(value.view_normal.z);
-                self.writer.write_bit_double(value.view_rotation);
-                self.writer.write_bit(value.evaluate_hatch);
-            }
-            ObjectContextKind::Opaque => {}
-        }
-
-        // Dimension context also carries a hard-pointer to its block (code 5),
-        // emitted after the scale in the handle stream.
-        if let ObjectContextKind::Dim(d) = &obj.kind {
-            self.writer
-                .write_handle(DwgReferenceType::HardPointer, d.block.value());
-        }
-        if let ObjectContextKind::HatchView(value) = &obj.kind {
-            self.writer
-                .write_handle(DwgReferenceType::SoftOwnership, value.view.value());
-        }
-        if let ObjectContextKind::MTextAttribute(value) = &obj.kind {
-            if value.enable_context {
-                if let Some(context) = &value.context {
+                    self.writer.write_bit_short(e.class_version);
+                    self.writer.write_bit(e.is_default);
+                    self.write_mtext_context(&e.mtext);
                     self.writer
-                        .write_handle(DwgReferenceType::SoftPointer, context.owner_handle.value());
-                    for reactor in &context.reactors {
+                        .write_handle(DwgReferenceType::SoftPointer, e.owner_handle.value());
+                    for r in &e.reactors {
                         self.writer
-                            .write_handle(DwgReferenceType::SoftPointer, reactor.value());
+                            .write_handle(DwgReferenceType::SoftPointer, r.value());
                     }
-                    if let Some(xdictionary_handle) = context.xdictionary_handle {
+                    if has_xdict || !self.version.r2004_plus() {
                         self.writer.write_handle(
                             DwgReferenceType::HardOwnership,
-                            xdictionary_handle.value(),
+                            e.xdictionary_handle.map_or(0, |h| h.value()),
                         );
                     }
                     self.writer
-                        .write_handle(DwgReferenceType::HardPointer, context.scale.value());
+                        .write_handle(DwgReferenceType::HardPointer, e.scale.value());
                 }
             }
+            ObjectContextKind::Leader(l) => {
+                self.writer.write_bit_long(l.vertices.len() as i32);
+                for v in &l.vertices {
+                    self.writer.write_3bit_double(*v);
+                }
+                self.writer.write_3bit_double(l.horizontal_direction);
+                self.writer.write_bit(l.flag);
+                self.writer.write_3bit_double(l.block_offset);
+                self.writer.write_3bit_double(l.annotation_offset);
+            }
+            ObjectContextKind::MLeader(context) => {
+                self.write_multileader_annotation_context(context, true);
+            }
+            ObjectContextKind::Dim(d) => {
+                self.writer
+                    .write_handle(DwgReferenceType::HardPointer, d.block.value());
+                self.writer.write_2raw_double(d.text_location);
+                self.writer.write_bit(d.flag);
+                self.writer.write_bit_double(d.text_rotation);
+                for i in (0..17).rev() {
+                    self.writer.write_bit((d.bits >> i) & 1 == 1);
+                }
+                match &d.subtype {
+                    DimSubtype::Aligned { definition_point }
+                    | DimSubtype::Radial { definition_point } => {
+                        self.writer.write_3bit_double(*definition_point);
+                    }
+                    DimSubtype::Angular { point } => self.writer.write_3bit_double(*point),
+                    DimSubtype::Diametric {
+                        point,
+                        definition_point,
+                    } => {
+                        self.writer.write_3bit_double(*point);
+                        self.writer.write_3bit_double(*definition_point);
+                    }
+                }
+            }
+            ObjectContextKind::HatchScale(h) => self.write_hatch_scale_context_data(h),
+            ObjectContextKind::HatchView(v) => {
+                self.write_hatch_scale_context_data(&v.hatch);
+                self.writer.write_3bit_double(v.normal);
+                self.writer.write_bit_double(v.rotation);
+                self.writer.write_bit(v.flag);
+                self.writer
+                    .write_handle(DwgReferenceType::SoftPointer, v.view.value());
+            }
         }
-
         self.register_object(obj.handle);
     }
 
+    /// The MTEXT context payload (A1).
+    fn write_mtext_context(&mut self, m: &crate::objects::MTextContext) {
+        self.writer.write_bit_long(m.attachment);
+        self.writer.write_3bit_double(m.x_direction);
+        self.writer.write_3bit_double(m.insertion);
+        self.writer.write_bit_double(m.defined_width);
+        self.writer.write_bit_double(m.defined_height);
+        self.writer.write_bit_double(m.extents_width);
+        self.writer.write_bit_double(m.extents_height);
+        self.writer.write_bit_short(m.column_type);
+        if m.column_type != 0 {
+            let c = m.columns.clone().unwrap_or_default();
+            self.writer.write_bit_long(c.count);
+            self.writer.write_bit_double(c.width);
+            self.writer.write_bit_double(c.gutter);
+            self.writer.write_bit(c.auto_height);
+            self.writer.write_bit(c.flow_reversed);
+            if m.column_type == 2 && !c.auto_height {
+                for i in 0..c.count.max(0) as usize {
+                    self.writer
+                        .write_bit_double(c.heights.get(i).copied().unwrap_or(0.0));
+                }
+            }
+        }
+    }
+
+    /// The hatch-scale context payload (A1).
     fn write_hatch_scale_context_data(&mut self, value: &crate::objects::HatchScaleContext) {
-        self.writer
-            .write_bit_short(value.pattern_lines.len() as i16);
+        self.writer.write_bit_long(value.pattern_lines.len() as i32);
         for line in &value.pattern_lines {
             self.writer.write_bit_double(line.angle);
             self.writer.write_bit_double(line.base_point.x);
@@ -2563,28 +2464,19 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_double(line.offset.x);
             self.writer.write_bit_double(line.offset.y);
             self.writer.write_bit_short(line.dash_lengths.len() as i16);
-            for dash in &line.dash_lengths {
-                self.writer.write_bit_double(*dash);
+            for d in &line.dash_lengths {
+                self.writer.write_bit_double(*d);
             }
         }
-        self.writer.write_bit_double(value.pattern_scale);
-        self.writer.write_bit_double(value.pattern_base.x);
-        self.writer.write_bit_double(value.pattern_base.y);
-        self.writer.write_bit_double(value.pattern_base.z);
+        self.writer.write_bit_double(value.factor);
+        self.writer.write_3bit_double(value.direction);
         self.writer.write_bit_long(value.loops.len() as i32);
-        for loop_data in &value.loops {
-            self.writer.write_bit_long(loop_data.loop_type);
-            self.writer.write_bit(loop_data.supports_context);
-            if !loop_data.supports_context {
-                if let Some(boundary) = &loop_data.boundary {
-                    self.write_hatch_boundary_path_contents(boundary, loop_data.loop_type, false);
-                } else if loop_data.loop_type & 2 != 0 {
-                    self.writer.write_bit(false);
-                    self.writer.write_bit(false);
-                    self.writer.write_bit_long(0);
-                } else {
-                    self.writer.write_bit_long(0);
-                }
+        for l in &value.loops {
+            self.writer.write_bit_long(l.path_flags);
+            let boundary = l.boundary.as_ref().filter(|_| !l.shared);
+            self.writer.write_bit(boundary.is_none());
+            if let Some(b) = boundary {
+                self.write_hatch_boundary_path_contents(b, l.path_flags, false);
             }
         }
     }

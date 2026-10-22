@@ -7870,7 +7870,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             ObjectContextKind::BlkRef {
                 rotation,
                 insertion,
-                scale_factor,
+                scale: scale_factor,
             } => {
                 self.writer.write_subclass("AcDbBlkRefObjectContextData")?;
                 self.writer.write_double(50, *rotation)?;
@@ -7889,7 +7889,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             } => {
                 self.writer.write_subclass("AcDbTextObjectContextData")?;
                 self.writer.write_i16(70, *horizontal_mode)?;
-                self.writer.write_double(50, *rotation)?;
+                self.writer.write_double(50, rotation.to_degrees())?;
                 self.writer.write_double(10, insertion.x)?;
                 self.writer.write_double(20, insertion.y)?;
                 self.writer.write_double(11, alignment.x)?;
@@ -7902,20 +7902,20 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 // with one: "Missing DXF group code: 1"), and with the x-axis
                 // direction in 10 and the insertion point in 11.
                 self.writer.write_i32(70, m.attachment)?;
-                self.writer.write_double(10, m.x_axis_dir.x)?;
-                self.writer.write_double(20, m.x_axis_dir.y)?;
-                self.writer.write_double(30, m.x_axis_dir.z)?;
+                self.writer.write_double(10, m.x_direction.x)?;
+                self.writer.write_double(20, m.x_direction.y)?;
+                self.writer.write_double(30, m.x_direction.z)?;
                 self.writer.write_double(11, m.insertion.x)?;
                 self.writer.write_double(21, m.insertion.y)?;
                 self.writer.write_double(31, m.insertion.z)?;
-                self.writer.write_double(40, m.rect_width)?;
-                self.writer.write_double(41, m.rect_height)?;
+                self.writer.write_double(40, m.defined_width)?;
+                self.writer.write_double(41, m.defined_height)?;
                 self.writer.write_double(42, m.extents_width)?;
                 self.writer.write_double(43, m.extents_height)?;
-                self.writer.write_i32(71, m.column_type)?;
+                self.writer.write_i16(71, m.column_type)?;
                 if m.column_type != 0 {
                     if let Some(c) = &m.columns {
-                        self.writer.write_i32(72, c.num_heights)?;
+                        self.writer.write_i32(72, c.count)?;
                         self.writer.write_double(44, c.width)?;
                         self.writer.write_double(45, c.gutter)?;
                         self.writer.write_bool(73, c.auto_height)?;
@@ -7929,55 +7929,35 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 }
             }
             ObjectContextKind::Dim(d) => {
+                // the drawing payload (A1): block, text placement and the class's points; the
+                // DWG record's 17 flag bits have no established DXF counterpart and are not written
                 self.writer
                     .write_subclass("AcDbDimensionObjectContextData")?;
                 self.writer.write_handle(2, d.block)?;
-                self.writer.write_bool(293, d.b293)?;
-                self.writer.write_double(10, d.def_pt.x)?;
-                self.writer.write_double(20, d.def_pt.y)?;
+                self.writer.write_bool(293, d.flag)?;
+                self.writer.write_double(10, d.text_location.x)?;
+                self.writer.write_double(20, d.text_location.y)?;
                 self.writer.write_double(30, 0.0)?;
-                self.writer.write_bool(294, d.is_def_textloc)?;
                 self.writer.write_double(140, d.text_rotation)?;
-                self.writer.write_bool(298, d.dimtofl)?;
-                self.writer.write_bool(291, d.dimosxd)?;
-                self.writer.write_bool(70, d.dimatfit)?;
-                self.writer.write_bool(292, d.dimtix)?;
-                self.writer.write_bool(71, d.dimtmove)?;
-                self.writer.write_i16(280, d.override_code as i16)?;
-                self.writer.write_bool(295, d.has_arrow2)?;
-                self.writer.write_bool(296, d.flip_arrow2)?;
-                self.writer.write_bool(297, d.flip_arrow1)?;
-                self.writer.write_subclass(d.subtype.subclass_marker())?;
-                let mut wp = |code: i32, p: &crate::types::Vector3| -> Result<()> {
-                    self.writer.write_double(code, p.x)?;
-                    self.writer.write_double(code + 10, p.y)?;
-                    self.writer.write_double(code + 20, p.z)?;
-                    Ok(())
+                let marker = match &d.subtype {
+                    DimSubtype::Aligned { .. } => "AcDbAlignedDimensionObjectContextData",
+                    DimSubtype::Angular { .. } => "AcDbAngularDimensionObjectContextData",
+                    DimSubtype::Diametric { .. } => "AcDbDiametricDimensionObjectContextData",
+                    DimSubtype::Radial { .. } => "AcDbRadialDimensionObjectContextData",
                 };
+                self.writer.write_subclass(marker)?;
                 match &d.subtype {
-                    DimSubtype::Aligned { dimline_pt } => wp(11, dimline_pt)?,
-                    DimSubtype::Angular { arc_pt } => wp(11, arc_pt)?,
+                    DimSubtype::Aligned { definition_point }
+                    | DimSubtype::Radial { definition_point } => {
+                        self.writer.write_point3d(11, *definition_point)?;
+                    }
+                    DimSubtype::Angular { point } => self.writer.write_point3d(11, *point)?,
                     DimSubtype::Diametric {
-                        first_arc_pt,
-                        def_pt,
+                        point,
+                        definition_point,
                     } => {
-                        wp(11, first_arc_pt)?;
-                        wp(12, def_pt)?;
-                    }
-                    DimSubtype::Radial { first_arc_pt } => wp(11, first_arc_pt)?,
-                    DimSubtype::RadialLarge {
-                        ovr_center,
-                        jog_point,
-                    } => {
-                        wp(12, ovr_center)?;
-                        wp(13, jog_point)?;
-                    }
-                    DimSubtype::Ordinate {
-                        feature_location_pt,
-                        leader_endpt,
-                    } => {
-                        wp(11, feature_location_pt)?;
-                        wp(12, leader_endpt)?;
+                        self.writer.write_point3d(11, *point)?;
+                        self.writer.write_point3d(12, *definition_point)?;
                     }
                 }
             }
@@ -7990,9 +7970,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_double(50, value.rotation.to_degrees())?;
                 self.writer.write_point2d(10, value.insertion)?;
                 self.writer.write_point2d(11, value.alignment)?;
-                let has_context = value.enable_context && value.context.is_some();
+                let has_context = value.multiline && value.mtext.is_some();
                 self.writer.write_bool(290, has_context)?;
-                if let Some(context) = value.context.as_ref().filter(|_| has_context) {
+                if let Some(context) = value.mtext.as_ref().filter(|_| has_context) {
                     self.writer.write_string(101, "Embedded Object")?;
                     self.writer.write_subclass("AcDbObjectContextData")?;
                     self.writer.write_i16(70, context.class_version)?;
@@ -8001,16 +7981,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                         .write_subclass("AcDbAnnotScaleObjectContextData")?;
                     self.writer.write_handle(340, context.scale)?;
                     self.writer.write_i32(70, context.mtext.attachment)?;
-                    self.writer.write_point3d(10, context.mtext.x_axis_dir)?;
+                    self.writer.write_point3d(10, context.mtext.x_direction)?;
                     self.writer.write_point3d(11, context.mtext.insertion)?;
-                    self.writer.write_double(40, context.mtext.rect_width)?;
-                    self.writer.write_double(41, context.mtext.rect_height)?;
+                    self.writer.write_double(40, context.mtext.defined_width)?;
+                    self.writer.write_double(41, context.mtext.defined_height)?;
                     self.writer.write_double(42, context.mtext.extents_width)?;
                     self.writer.write_double(43, context.mtext.extents_height)?;
-                    self.writer.write_i32(71, context.mtext.column_type)?;
+                    self.writer.write_i16(71, context.mtext.column_type)?;
                     if context.mtext.column_type != 0 {
                         if let Some(columns) = &context.mtext.columns {
-                            self.writer.write_i32(72, columns.num_heights)?;
+                            self.writer.write_i32(72, columns.count)?;
                             self.writer.write_double(44, columns.width)?;
                             self.writer.write_double(45, columns.gutter)?;
                             self.writer.write_bool(73, columns.auto_height)?;
@@ -8026,22 +8006,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             ObjectContextKind::Leader(value) => {
                 self.writer.write_subclass("AcDbLeaderObjectContextData")?;
-                self.writer.write_i32(70, value.points.len() as i32)?;
-                for point in &value.points {
+                self.writer.write_i32(70, value.vertices.len() as i32)?;
+                for point in &value.vertices {
                     self.writer.write_point3d(10, *point)?;
                 }
-                self.writer.write_point3d(11, value.x_direction)?;
-                self.writer.write_bool(290, value.annotation_enabled)?;
-                self.writer.write_point3d(12, value.insertion_offset)?;
-                self.writer.write_point3d(13, value.endpoint_projection)?;
-            }
-            ObjectContextKind::Fcf {
-                location,
-                horizontal_direction,
-            } => {
-                self.writer.write_subclass("AcDbFcfObjectContextData")?;
-                self.writer.write_point3d(10, *location)?;
-                self.writer.write_point3d(11, *horizontal_direction)?;
+                self.writer.write_point3d(11, value.horizontal_direction)?;
+                self.writer.write_bool(290, value.flag)?;
+                self.writer.write_point3d(12, value.block_offset)?;
+                self.writer.write_point3d(13, value.annotation_offset)?;
             }
             ObjectContextKind::HatchScale(value) => {
                 self.write_hatch_scale_context_data(value)?;
@@ -8050,10 +8022,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.write_hatch_scale_context_data(&value.hatch)?;
                 self.writer.write_subclass("AcDbHatchViewContextData")?;
                 self.writer.write_handle(330, value.view)?;
-                self.writer.write_point3d(10, value.view_normal)?;
-                self.writer
-                    .write_double(51, value.view_rotation.to_degrees())?;
-                self.writer.write_bool(290, value.evaluate_hatch)?;
+                self.writer.write_point3d(10, value.normal)?;
+                self.writer.write_double(51, value.rotation.to_degrees())?;
+                self.writer.write_bool(290, value.flag)?;
             }
             ObjectContextKind::Opaque => {}
         }
@@ -8079,26 +8050,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_double(49, *dash)?;
             }
         }
-        self.writer.write_double(40, value.pattern_scale)?;
-        self.writer.write_point3d(10, value.pattern_base)?;
+        self.writer.write_double(40, value.factor)?;
+        self.writer.write_point3d(10, value.direction)?;
         self.writer.write_i32(90, value.loops.len() as i32)?;
         for loop_data in &value.loops {
-            self.writer.write_i32(90, loop_data.loop_type)?;
-            self.writer.write_bool(290, loop_data.supports_context)?;
-            if !loop_data.supports_context {
+            self.writer.write_i32(90, loop_data.path_flags)?;
+            self.writer.write_bool(290, loop_data.shared)?;
+            if !loop_data.shared {
                 let edges = loop_data
                     .boundary
                     .as_ref()
                     .map(|boundary| boundary.edges.as_slice())
                     .unwrap_or_default();
-                if loop_data.loop_type & 2 == 0 {
+                if loop_data.path_flags & 2 == 0 {
                     self.writer.write_i32(93, edges.len() as i32)?;
                 }
                 if let Some(edge @ BoundaryEdge::Polyline(_)) =
-                    edges.first().filter(|_| loop_data.loop_type & 2 != 0)
+                    edges.first().filter(|_| loop_data.path_flags & 2 != 0)
                 {
                     self.write_hatch_edge(edge)?;
-                } else if loop_data.loop_type & 2 == 0 {
+                } else if loop_data.path_flags & 2 == 0 {
                     for edge in edges {
                         self.write_hatch_edge(edge)?;
                     }

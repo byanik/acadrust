@@ -254,10 +254,10 @@ fn mtext_context_data_has_no_subclass_marker_and_autocad_point_codes() {
         scale: Handle::NULL,
         kind: ObjectContextKind::MText(MTextContext {
             attachment: 1,
-            x_axis_dir: Vector3::new(1.0, 0.0, 0.0),
+            x_direction: Vector3::new(1.0, 0.0, 0.0),
             insertion: Vector3::new(29798.0, 9841.0, 0.0),
-            rect_width: 392.0,
-            rect_height: 0.0,
+            defined_width: 392.0,
+            defined_height: 0.0,
             extents_width: 175.0,
             extents_height: 177.0,
             column_type: 0,
@@ -286,7 +286,7 @@ fn mtext_context_data_has_no_subclass_marker_and_autocad_point_codes() {
         panic!("wrong kind")
     };
     assert_eq!(m.insertion, Vector3::new(29798.0, 9841.0, 0.0));
-    assert_eq!(m.x_axis_dir, Vector3::new(1.0, 0.0, 0.0));
+    assert_eq!(m.x_direction, Vector3::new(1.0, 0.0, 0.0));
 }
 
 #[test]

@@ -1,16 +1,7 @@
-//! Semantic round-trip validation of the annotative
-//! `AcDb*ObjectContextData` encoder.
-//!
-//! Strategy: the golden R2018 file `~/Downloads/0718-mbmdmc.dwg` carries 134
-//! real `AcDbBlkRefObjectContextData` leaves (class 533). The reader models each
-//! into an `ObjectContextData`.
-//!
-//! - `baseline_roundtrip_preserves_all_contexts` proves modeling did not
-//!   regress the round-trip: a plain save/reload preserves every modeled leaf.
-//! - `encoder_preserves_context_fields_and_scale_link` verifies that the field
-//!   encoder preserves both the modeled payload and its annotation-scale link.
-//!
-//! Skips (does not fail) when the golden file is absent, so CI stays green.
+//! Annotative context objects through a whole DWG save and read (fork patch A1): every modelled
+//! class is written by the object writer and read back by the re-derived decoder, which keeps a
+//! payload only when the record ends exactly with it. A record of a class the fork does not model
+//! survives verbatim as an unknown object with its scale link.
 
 use std::io::Cursor;
 
@@ -18,22 +9,12 @@ use acadrust::entities::{
     BoundaryEdge, BoundaryPath, BoundaryPathFlags, HatchPatternLine, LineEdge,
 };
 use acadrust::objects::{
-    DimContext, DimSubtype, HatchLoopContext, HatchScaleContext, HatchViewContext, MTextColumns,
-    MTextContext, ObjectContextData, ObjectContextKind, ObjectType, Scale,
+    DimContext, DimSubtype, EmbeddedMTextContext, HatchLoopContext, HatchScaleContext,
+    HatchViewContext, LeaderContext, MTextAttributeContext, MTextColumns, MTextContext,
+    ObjectContextData, ObjectContextKind, ObjectType, Scale,
 };
 use acadrust::types::{DxfVersion, Vector2, Vector3};
 use acadrust::{CadDocument, DwgReader, DwgWriter, Handle};
-
-const GOLDEN: &str = "/home/hakanseven/Downloads/0718-mbmdmc.dwg";
-
-fn load_golden() -> Option<CadDocument> {
-    if std::fs::metadata(GOLDEN).is_err() {
-        eprintln!("SKIP: golden file {GOLDEN} not present");
-        return None;
-    }
-    let mut reader = DwgReader::from_file(GOLDEN).expect("open golden");
-    Some(reader.read().expect("read golden"))
-}
 
 fn roundtrip(doc: &CadDocument) -> CadDocument {
     let bytes = DwgWriter::write_to_vec(doc).expect("dwg write");
@@ -41,121 +22,12 @@ fn roundtrip(doc: &CadDocument) -> CadDocument {
     r.read().expect("dwg re-read")
 }
 
-#[test]
-fn baseline_roundtrip_preserves_all_contexts() {
-    let Some(doc) = load_golden() else { return };
-
-    let ctx0 = doc.context_scales.len();
-    let blk0 = blkref_fields(&doc);
-    eprintln!(
-        "loaded: context_scales={ctx0} modeled_blkref={}",
-        blk0.len()
-    );
-    assert!(blk0.len() >= 134, "expected the 134 BLKREF contexts");
-
-    let rt = roundtrip(&doc);
-    let ctx1 = rt.context_scales.len();
-    let blk1 = blkref_fields(&rt);
-
-    assert_eq!(ctx0, ctx1, "context_scales count changed on round-trip");
-    assert_eq!(blk0, blk1, "modeled BLKREF fields changed on round-trip");
-}
-
-/// A BLKREF leaf's decoded fields + the annotation scale it resolves to (the
-/// interop-critical link), keyed by handle.
-#[derive(Debug, Clone, PartialEq)]
-struct BlkFields {
-    class_version: i16,
-    is_default: bool,
-    scale_target: Handle,
-    rotation: f64,
-    insertion: [f64; 3],
-    scale_factor: [f64; 3],
-}
-
-fn blkref_fields(doc: &CadDocument) -> std::collections::BTreeMap<Handle, BlkFields> {
-    doc.objects
-        .iter()
-        .filter_map(|(h, o)| match o {
-            ObjectType::ObjectContextData(c) => match &c.kind {
-                ObjectContextKind::BlkRef {
-                    rotation,
-                    insertion,
-                    scale_factor,
-                } => Some((
-                    *h,
-                    BlkFields {
-                        class_version: c.class_version,
-                        is_default: c.is_default,
-                        scale_target: c.scale,
-                        rotation: *rotation,
-                        insertion: [insertion.x, insertion.y, insertion.z],
-                        scale_factor: [scale_factor.x, scale_factor.y, scale_factor.z],
-                    },
-                )),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
-}
-
-#[test]
-fn encoder_preserves_context_fields_and_scale_link() {
-    let Some(doc) = load_golden() else { return };
-
-    // Ground truth: the fields AutoCAD stored + which SCALE each leaf points at.
-    let original = blkref_fields(&doc);
-    assert!(original.len() >= 134, "expected the 134 BLKREF contexts");
-
-    // Recognised context objects are always encoded from their modeled fields.
-    let rt = roundtrip(&doc);
-    let produced = blkref_fields(&rt);
-
-    assert_eq!(
-        original.len(),
-        produced.len(),
-        "leaf count changed after encode"
-    );
-
-    let mut mism = 0usize;
-    for (h, orig) in &original {
-        match produced.get(h) {
-            None => {
-                eprintln!("leaf {h:?} vanished");
-                mism += 1;
-            }
-            Some(got) if got != orig => {
-                if mism < 3 {
-                    eprintln!("leaf {h:?} FIELD MISMATCH:\n  orig {orig:?}\n  got  {got:?}");
-                }
-                mism += 1;
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(
-        mism, 0,
-        "{mism} BLKREF leaves lost fields/scale-link after field-encoding"
-    );
-
-    // The re-encode must be a stable semantic fixed point.
-    let twice = blkref_fields(&roundtrip(&rt));
-    assert_eq!(produced, twice, "field encoder is not semantically stable");
-}
-
-// ── Synthesis path (what OCS uses to CREATE contexts from scratch) ──────────
-
-/// Build a fresh R2018 document carrying one annotative context leaf of `kind`
-/// that references a synthesized SCALE, round-trip it, and return the reloaded
-/// leaf's decoded fields (scale target + kind). Exercises the whole create
-/// path: class registration → object insertion → DWG write → read-back.
-fn synth_roundtrip_leaf(
-    class_name: &str,
-    kind: ObjectContextKind,
-) -> (Handle, ObjectContextKind, i16, bool) {
-    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
-    doc.register_object_context_class(class_name);
+/// One context leaf of `kind` on a fresh document of `version`, written and read back: the
+/// reloaded leaf (scale link checked) as (kind, class version, default).
+fn roundtrip_leaf(version: DxfVersion, kind: ObjectContextKind) -> (ObjectContextKind, i16, bool) {
+    let mut doc = CadDocument::with_version(version);
+    let class = kind.class_name().expect("a modelled class");
+    doc.register_object_context_class(class);
 
     let scale_h = doc.allocate_handle();
     let mut scale = Scale::new("1:50", 1.0, 50.0);
@@ -169,7 +41,7 @@ fn synth_roundtrip_leaf(
         owner_handle: owner_h,
         reactors: vec![owner_h],
         xdictionary_handle: None,
-        class_version: 3,
+        class_version: 4,
         is_default: true,
         scale: scale_h,
         kind,
@@ -178,194 +50,247 @@ fn synth_roundtrip_leaf(
         .insert(leaf_h, ObjectType::ObjectContextData(ctx));
 
     let rt = roundtrip(&doc);
-    let (h, c) = rt
-        .objects
-        .iter()
-        .find_map(|(h, o)| match o {
-            ObjectType::ObjectContextData(c) => Some((*h, c.clone())),
-            _ => None,
-        })
-        .expect("context leaf survived round-trip");
-    // The scale link must resolve back to a SCALE object in the reloaded doc.
+    let c = match rt.objects.get(&leaf_h) {
+        Some(ObjectType::ObjectContextData(c)) => c.clone(),
+        other => panic!("{class}: the leaf came back as {other:?}"),
+    };
+    assert_eq!(c.scale, scale_h, "{class}: scale link");
     assert!(
         matches!(rt.objects.get(&c.scale), Some(ObjectType::Scale(_))),
-        "leaf scale handle {:?} must resolve to a SCALE",
-        c.scale
+        "{class}: the scale handle must resolve to a SCALE"
     );
-    assert!(
-        rt.context_scales.contains_key(&h),
-        "leaf must be registered in context_scales"
-    );
-    (h, c.kind, c.class_version, c.is_default)
+    assert_eq!(rt.context_scales.get(&leaf_h), Some(&scale_h), "{class}");
+    (c.kind, c.class_version, c.is_default)
+}
+
+const VERSIONS: [DxfVersion; 4] = [
+    DxfVersion::AC1015,
+    DxfVersion::AC1018,
+    DxfVersion::AC1024,
+    DxfVersion::AC1032,
+];
+
+fn assert_roundtrips(kind: ObjectContextKind) {
+    for v in VERSIONS {
+        let (got, cv, def) = roundtrip_leaf(v, kind.clone());
+        assert_eq!((cv, def), (4, true), "{v:?}");
+        assert_eq!(got, kind, "{v:?}");
+    }
+}
+
+fn mtext(column_type: i16, columns: Option<MTextColumns>) -> MTextContext {
+    MTextContext {
+        attachment: 2,
+        x_direction: Vector3::new(0.6, 0.8, 0.0),
+        insertion: Vector3::new(7306.97, 12427.8, 0.0),
+        defined_width: 39.26,
+        defined_height: 17.6,
+        extents_width: 1.146,
+        extents_height: 0.0975,
+        column_type,
+        columns,
+    }
 }
 
 #[test]
-fn synth_blkref_context_roundtrips() {
-    let kind = ObjectContextKind::BlkRef {
+fn annotation_scale_context_roundtrips() {
+    assert_roundtrips(ObjectContextKind::AnnotScale);
+}
+
+#[test]
+fn block_reference_context_roundtrips() {
+    assert_roundtrips(ObjectContextKind::BlkRef {
         rotation: 0.75,
         insertion: Vector3::new(123.5, -42.25, 7.0),
-        scale_factor: Vector3::new(2.0, 3.0, 4.0),
-    };
-    let (_h, got, cv, def) =
-        synth_roundtrip_leaf("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(cv, 3);
-    assert!(def);
-    assert_eq!(
-        got, kind,
-        "BLKREF fields did not survive synthesis round-trip"
-    );
+        scale: Vector3::new(2.0, 3.0, 4.0),
+    });
 }
 
 #[test]
-fn synth_text_context_roundtrips() {
-    let kind = ObjectContextKind::Text {
+fn text_context_roundtrips() {
+    assert_roundtrips(ObjectContextKind::Text {
         horizontal_mode: 1,
         rotation: 0.5,
         insertion: Vector2::new(10.0, 20.0),
         alignment: Vector2::new(-3.0, 4.0),
-    };
-    let (_h, got, cv, def) = synth_roundtrip_leaf("ACDB_TEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(cv, 3);
-    assert!(def);
-    assert_eq!(
-        got, kind,
-        "TEXT fields did not survive synthesis round-trip"
-    );
-}
-
-#[test]
-fn synth_mtext_context_roundtrips() {
-    // Non-columned MTEXT (the common single-representation case).
-    let kind = ObjectContextKind::MText(MTextContext {
-        attachment: 2,
-        x_axis_dir: Vector3::new(1.0, 0.0, 0.0),
-        insertion: Vector3::new(7306.97, 12427.8, 0.0),
-        rect_width: 39.26,
-        rect_height: 17.6,
-        extents_width: 1.146,
-        extents_height: 0.0975,
-        column_type: 0,
-        columns: None,
     });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(
-        got, kind,
-        "MTEXT (no columns) fields did not survive round-trip"
-    );
 }
 
 #[test]
-fn synth_mtext_columns_roundtrips() {
-    // Dynamic columns with explicit heights — exercises the column branch.
-    let kind = ObjectContextKind::MText(MTextContext {
-        attachment: 1,
-        x_axis_dir: Vector3::new(0.7071, 0.7071, 0.0),
-        insertion: Vector3::new(1.0, 2.0, 3.0),
-        rect_width: 100.0,
-        rect_height: 50.0,
-        extents_width: 90.0,
-        extents_height: 45.0,
-        column_type: 2,
-        columns: Some(MTextColumns {
-            num_heights: 3,
+fn mtext_context_roundtrips_with_and_without_columns() {
+    assert_roundtrips(ObjectContextKind::MText(mtext(0, None)));
+    assert_roundtrips(ObjectContextKind::MText(mtext(
+        2,
+        Some(MTextColumns {
+            count: 3,
             width: 30.0,
             gutter: 5.0,
             auto_height: false,
             flow_reversed: true,
             heights: vec![10.0, 20.0, 15.0],
         }),
-    });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(
-        got, kind,
-        "MTEXT (columns) fields did not survive round-trip"
-    );
+    )));
 }
 
 #[test]
-fn synth_hatch_view_context_roundtrips_inline_boundaries() {
-    let mut boundary = BoundaryPath::with_flags(BoundaryPathFlags::from_bits(1560));
+fn attribute_context_roundtrips_single_and_multiline() {
+    assert_roundtrips(ObjectContextKind::MTextAttribute(MTextAttributeContext {
+        horizontal_mode: 2,
+        rotation: 0.25,
+        insertion: Vector2::new(1.0, 2.0),
+        alignment: Vector2::new(5.0, 2.0),
+        multiline: false,
+        mtext: None,
+    }));
+    for v in VERSIONS {
+        let embedded = EmbeddedMTextContext {
+            owner_handle: Handle::NULL,
+            reactors: Vec::new(),
+            xdictionary_handle: None,
+            has_ds_data: false,
+            class_version: 4,
+            is_default: true,
+            scale: Handle::NULL,
+            mtext: mtext(0, None),
+        };
+        let kind = ObjectContextKind::MTextAttribute(MTextAttributeContext {
+            horizontal_mode: 0,
+            rotation: 0.0,
+            insertion: Vector2::new(1.0, 2.0),
+            alignment: Vector2::new(0.0, 0.0),
+            multiline: true,
+            mtext: Some(embedded),
+        });
+        let (got, _, _) = roundtrip_leaf(v, kind.clone());
+        let (ObjectContextKind::MTextAttribute(g), ObjectContextKind::MTextAttribute(k)) =
+            (&got, &kind)
+        else {
+            panic!("{v:?}: {got:?}")
+        };
+        assert!(g.multiline, "{v:?}");
+        // handles of the embedded object may be remapped by the save; its payload may not
+        assert_eq!(
+            g.mtext
+                .as_ref()
+                .map(|e| (&e.mtext, e.class_version, e.is_default)),
+            k.mtext
+                .as_ref()
+                .map(|e| (&e.mtext, e.class_version, e.is_default)),
+            "{v:?}"
+        );
+    }
+}
+
+#[test]
+fn leader_context_roundtrips() {
+    assert_roundtrips(ObjectContextKind::Leader(LeaderContext {
+        vertices: vec![
+            Vector3::new(9.57, 10.07, 0.0),
+            Vector3::new(12.44, 12.75, 0.0),
+            Vector3::new(15.39, 12.75, 0.0),
+        ],
+        horizontal_direction: Vector3::new(1.0, 0.0, 0.0),
+        flag: false,
+        block_offset: Vector3::new(0.0, 0.0, 0.0),
+        annotation_offset: Vector3::new(0.0, -0.09, 0.0),
+    }));
+}
+
+fn dim(subtype: DimSubtype) -> ObjectContextKind {
+    ObjectContextKind::Dim(DimContext {
+        block: Handle::from(0x2Au64),
+        text_location: Vector2::new(11.5, 22.5),
+        flag: true,
+        text_rotation: 0.25,
+        bits: 0b0_0000_1000_1000_0011,
+        subtype,
+    })
+}
+
+#[test]
+fn dimension_contexts_roundtrip() {
+    assert_roundtrips(dim(DimSubtype::Aligned {
+        definition_point: Vector3::new(1.0, 2.0, 3.0),
+    }));
+    assert_roundtrips(dim(DimSubtype::Angular {
+        point: Vector3::new(4.0, 5.0, 0.0),
+    }));
+    assert_roundtrips(dim(DimSubtype::Diametric {
+        point: Vector3::new(4.0, 5.0, 0.0),
+        definition_point: Vector3::new(-4.0, -5.0, 0.0),
+    }));
+    assert_roundtrips(dim(DimSubtype::Radial {
+        definition_point: Vector3::new(7.0, 8.0, 0.0),
+    }));
+}
+
+fn hatch() -> HatchScaleContext {
+    let mut boundary = BoundaryPath::with_flags(BoundaryPathFlags::from_bits(1));
     boundary.add_edge(BoundaryEdge::Line(LineEdge {
         start: Vector2::new(1.0, 2.0),
         end: Vector2::new(3.0, 4.0),
     }));
-    let kind = ObjectContextKind::HatchView(HatchViewContext {
-        hatch: HatchScaleContext {
-            pattern_lines: vec![HatchPatternLine {
-                angle: 0.5,
-                base_point: Vector2::new(5.0, 6.0),
-                offset: Vector2::new(0.25, 0.5),
-                dash_lengths: vec![1.0, -0.5],
-            }],
-            pattern_scale: 2.0,
-            pattern_base: Vector3::new(7.0, 8.0, 9.0),
-            loops: vec![
-                HatchLoopContext {
-                    loop_type: 7,
-                    supports_context: true,
-                    boundary: None,
-                },
-                HatchLoopContext {
-                    loop_type: 1560,
-                    supports_context: false,
-                    boundary: Some(boundary),
-                },
-            ],
-        },
-        view: Handle::from(0x45u64),
-        view_normal: Vector3::new(0.0, 0.0, 12.5),
-        view_rotation: 0.75,
-        evaluate_hatch: true,
-    });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_HATCHVIEWCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(got, kind, "hatch-view fields did not survive round-trip");
-}
-
-fn dim_ctx(subtype: DimSubtype) -> DimContext {
-    DimContext {
-        def_pt: Vector2::new(11.5, 22.5),
-        is_def_textloc: true,
-        text_rotation: 0.25,
-        block: Handle::from(0x2Au64),
-        b293: false,
-        dimtofl: true,
-        dimosxd: false,
-        dimatfit: true,
-        dimtix: false,
-        dimtmove: true,
-        override_code: 3,
-        has_arrow2: true,
-        flip_arrow2: false,
-        flip_arrow1: true,
-        subtype,
+    HatchScaleContext {
+        pattern_lines: vec![HatchPatternLine {
+            angle: 0.5,
+            base_point: Vector2::new(5.0, 6.0),
+            offset: Vector2::new(0.25, 0.5),
+            dash_lengths: vec![1.0, -0.5],
+        }],
+        factor: 1.0,
+        direction: Vector3::new(0.0, 1.0, 0.0),
+        loops: vec![
+            HatchLoopContext {
+                path_flags: 7,
+                shared: true,
+                boundary: None,
+            },
+            HatchLoopContext {
+                path_flags: 1,
+                shared: false,
+                boundary: Some(boundary),
+            },
+        ],
     }
 }
 
 #[test]
-fn synth_aligned_dim_context_roundtrips() {
-    let kind = ObjectContextKind::Dim(dim_ctx(DimSubtype::Aligned {
-        dimline_pt: Vector3::new(1.0, 2.0, 3.0),
-    }));
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_ALDIMOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(got, kind, "aligned-dim fields did not survive round-trip");
-    // The dimension's block hard-pointer must survive too.
-    if let ObjectContextKind::Dim(d) = &got {
-        assert_eq!(d.block, Handle::from(0x2Au64), "dim block handle lost");
+fn hatch_contexts_roundtrip() {
+    for v in VERSIONS {
+        let (got, _, _) = roundtrip_leaf(v, ObjectContextKind::HatchScale(hatch()));
+        let ObjectContextKind::HatchScale(h) = got else {
+            panic!("{v:?}: {got:?}")
+        };
+        assert_eq!(h.pattern_lines, hatch().pattern_lines, "{v:?}");
+        assert_eq!((h.factor, h.direction), (1.0, hatch().direction), "{v:?}");
+        let shape: Vec<_> = h
+            .loops
+            .iter()
+            .map(|l| {
+                (
+                    l.path_flags,
+                    l.shared,
+                    l.boundary.as_ref().map(|b| b.edges.len()),
+                )
+            })
+            .collect();
+        assert_eq!(shape, vec![(7, true, None), (1, false, Some(1))], "{v:?}");
     }
-}
-
-#[test]
-fn synth_ordinate_dim_context_roundtrips() {
-    // Two-point subtype — exercises the multi-3BD path.
-    let kind = ObjectContextKind::Dim(dim_ctx(DimSubtype::Ordinate {
-        feature_location_pt: Vector3::new(4.0, 5.0, 6.0),
-        leader_endpt: Vector3::new(7.0, 8.0, 9.0),
-    }));
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS", kind.clone());
-    assert_eq!(got, kind, "ordinate-dim fields did not survive round-trip");
+    let (got, _, _) = roundtrip_leaf(
+        DxfVersion::AC1032,
+        ObjectContextKind::HatchView(HatchViewContext {
+            hatch: hatch(),
+            view: Handle::NULL,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            rotation: 1.5,
+            flag: false,
+        }),
+    );
+    let ObjectContextKind::HatchView(hv) = got else {
+        panic!("{got:?}")
+    };
+    assert_eq!(
+        (hv.normal, hv.rotation, hv.flag),
+        (Vector3::new(0.0, 0.0, 1.0), 1.5, false)
+    );
 }

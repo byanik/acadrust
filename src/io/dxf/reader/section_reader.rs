@@ -802,16 +802,16 @@ fn class_dxf_hatch_scale_context(fields: &mut ClassDxfFields) -> crate::objects:
         let loop_type = fields.i32(section, 90);
         let supports_context = fields.bool(section, 290);
         loops.push(crate::objects::HatchLoopContext {
-            loop_type,
-            supports_context,
+            path_flags: loop_type,
+            shared: supports_context,
             boundary: (!supports_context)
                 .then(|| class_dxf_hatch_context_boundary(fields, loop_type)),
         });
     }
     crate::objects::HatchScaleContext {
         pattern_lines,
-        pattern_scale,
-        pattern_base,
+        factor: pattern_scale,
+        direction: pattern_base,
         loops,
     }
 }
@@ -5007,7 +5007,7 @@ impl<'a> SectionReader<'a> {
                 ObjectContextKind::BlkRef {
                     rotation: fields.f64(section, 50),
                     insertion: fields.point3(section, 10),
-                    scale_factor: Vector3::new(
+                    scale: Vector3::new(
                         fields.f64(section, 41),
                         fields.f64(section, 42),
                         fields.f64(section, 43),
@@ -5018,7 +5018,7 @@ impl<'a> SectionReader<'a> {
                 let section = "AcDbTextObjectContextData";
                 ObjectContextKind::Text {
                     horizontal_mode: fields.i16(section, 70),
-                    rotation: fields.f64(section, 50),
+                    rotation: fields.f64(section, 50).to_radians(),
                     insertion: fields.point2(section, 10),
                     alignment: fields.point2(section, 11),
                 }
@@ -5035,7 +5035,7 @@ impl<'a> SectionReader<'a> {
                     "AcDbAnnotScaleObjectContextData"
                 };
                 let attachment = fields.i32(section, 70);
-                let (insertion, x_axis_dir) = if legacy {
+                let (insertion, x_direction) = if legacy {
                     (fields.point3(section, 10), fields.point3(section, 11))
                 } else {
                     (fields.point3(section, 11), fields.point3(section, 10))
@@ -5044,7 +5044,7 @@ impl<'a> SectionReader<'a> {
                 let rect_height = fields.f64(section, 41);
                 let extents_width = fields.f64(section, 42);
                 let extents_height = fields.f64(section, 43);
-                let column_type = fields.i32(section, 71);
+                let column_type = fields.i16(section, 71);
                 let columns = if column_type != 0 {
                     let num_heights = fields.i32(section, 72);
                     let width = fields.f64(section, 44);
@@ -5058,7 +5058,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     Some(MTextColumns {
-                        num_heights,
+                        count: num_heights,
                         width,
                         gutter,
                         auto_height,
@@ -5070,10 +5070,10 @@ impl<'a> SectionReader<'a> {
                 };
                 ObjectContextKind::MText(MTextContext {
                     attachment,
-                    x_axis_dir,
+                    x_direction,
                     insertion,
-                    rect_width,
-                    rect_height,
+                    defined_width: rect_width,
+                    defined_height: rect_height,
                     extents_width,
                     extents_height,
                     column_type,
@@ -5083,63 +5083,33 @@ impl<'a> SectionReader<'a> {
             "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS"
             | "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS"
             | "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS"
-            | "ACDB_RADIMOBJECTCONTEXTDATA_CLASS"
-            | "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS"
-            | "ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS" => {
+            | "ACDB_RADIMOBJECTCONTEXTDATA_CLASS" => {
+                // the drawing payload only: the block of this scale and the text placement; the
+                // DWG record's 17 flag bits have no established DXF counterpart here (A1)
                 let section = "AcDbDimensionObjectContextData";
-                let block = fields.handle(section, 2);
-                let b293 = fields.bool(section, 293);
-                let def_pt = fields.point2(section, 10);
-                let is_def_textloc = fields.bool(section, 294);
-                let text_rotation = fields.f64(section, 140);
-                let dimtofl = fields.bool(section, 298);
-                let dimosxd = fields.bool(section, 291);
-                let dimatfit = fields.bool(section, 70);
-                let dimtix = fields.bool(section, 292);
-                let dimtmove = fields.bool(section, 71);
-                let override_code = fields.i16(section, 280) as u8;
-                let has_arrow2 = fields.bool(section, 295);
-                let flip_arrow2 = fields.bool(section, 296);
-                let flip_arrow1 = fields.bool(section, 297);
                 let subtype = match name.as_str() {
-                    "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS" => DimSubtype::Aligned {
-                        dimline_pt: fields.point3("AcDbAlignedDimensionObjectContextData", 11),
-                    },
                     "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS" => DimSubtype::Angular {
-                        arc_pt: fields.point3("AcDbAngularDimensionObjectContextData", 11),
+                        point: fields.point3("AcDbAngularDimensionObjectContextData", 11),
                     },
                     "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS" => DimSubtype::Diametric {
-                        first_arc_pt: fields.point3("AcDbDiametricDimensionObjectContextData", 11),
-                        def_pt: fields.point3("AcDbDiametricDimensionObjectContextData", 12),
+                        point: fields.point3("AcDbDiametricDimensionObjectContextData", 11),
+                        definition_point: fields
+                            .point3("AcDbDiametricDimensionObjectContextData", 12),
                     },
                     "ACDB_RADIMOBJECTCONTEXTDATA_CLASS" => DimSubtype::Radial {
-                        first_arc_pt: fields.point3("AcDbRadialDimensionObjectContextData", 11),
+                        definition_point: fields.point3("AcDbRadialDimensionObjectContextData", 11),
                     },
-                    "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS" => DimSubtype::RadialLarge {
-                        ovr_center: fields.point3("AcDbRadialDimensionLargeObjectContextData", 12),
-                        jog_point: fields.point3("AcDbRadialDimensionLargeObjectContextData", 13),
-                    },
-                    _ => DimSubtype::Ordinate {
-                        feature_location_pt: fields
-                            .point3("AcDbOrdinateDimensionObjectContextData", 11),
-                        leader_endpt: fields.point3("AcDbOrdinateDimensionObjectContextData", 12),
+                    _ => DimSubtype::Aligned {
+                        definition_point: fields
+                            .point3("AcDbAlignedDimensionObjectContextData", 11),
                     },
                 };
                 ObjectContextKind::Dim(DimContext {
-                    def_pt,
-                    is_def_textloc,
-                    text_rotation,
-                    block,
-                    b293,
-                    dimtofl,
-                    dimosxd,
-                    dimatfit,
-                    dimtix,
-                    dimtmove,
-                    override_code,
-                    has_arrow2,
-                    flip_arrow2,
-                    flip_arrow1,
+                    block: fields.handle(section, 2),
+                    text_location: fields.point2(section, 10),
+                    flag: fields.bool(section, 293),
+                    text_rotation: fields.f64(section, 140),
+                    bits: 0,
                     subtype,
                 })
             }
@@ -5159,20 +5129,20 @@ impl<'a> SectionReader<'a> {
                 } else {
                     "AcDbAnnotScaleObjectContextData"
                 };
-                let enable_context = fields.bool(enable_section, 290);
-                let context = if enable_context && fields.has("AcDbObjectContextData", 70) {
+                let multiline = fields.bool(enable_section, 290);
+                let context = if multiline && fields.has("AcDbObjectContextData", 70) {
                     let context_class_version = fields.i16("AcDbObjectContextData", 70);
                     let context_is_default = fields.bool("AcDbObjectContextData", 290);
                     let section = "AcDbAnnotScaleObjectContextData";
                     let context_scale = fields.handle(section, 340);
                     let attachment = fields.i32(section, 70);
-                    let x_axis_dir = fields.point3(section, 10);
+                    let x_direction = fields.point3(section, 10);
                     let context_insertion = fields.point3(section, 11);
                     let rect_width = fields.f64(section, 40);
                     let rect_height = fields.f64(section, 41);
                     let extents_width = fields.f64(section, 42);
                     let extents_height = fields.f64(section, 43);
-                    let column_type = fields.i32(section, 71);
+                    let column_type = fields.i16(section, 71);
                     let columns = if column_type != 0 {
                         let num_heights = fields.i32(section, 72);
                         let width = fields.f64(section, 44);
@@ -5186,7 +5156,7 @@ impl<'a> SectionReader<'a> {
                             }
                         }
                         Some(MTextColumns {
-                            num_heights,
+                            count: num_heights,
                             width,
                             gutter,
                             auto_height,
@@ -5200,16 +5170,16 @@ impl<'a> SectionReader<'a> {
                         owner_handle: Handle::NULL,
                         reactors: Vec::new(),
                         xdictionary_handle: None,
-                        has_binary_data: false,
+                        has_ds_data: false,
                         class_version: context_class_version,
                         is_default: context_is_default,
                         scale: context_scale,
                         mtext: MTextContext {
                             attachment,
-                            x_axis_dir,
+                            x_direction,
                             insertion: context_insertion,
-                            rect_width,
-                            rect_height,
+                            defined_width: rect_width,
+                            defined_height: rect_height,
                             extents_width,
                             extents_height,
                             column_type,
@@ -5224,8 +5194,8 @@ impl<'a> SectionReader<'a> {
                     rotation,
                     insertion,
                     alignment,
-                    enable_context,
-                    context,
+                    multiline,
+                    mtext: context,
                 })
             }
             "ACDB_LEADEROBJECTCONTEXTDATA_CLASS" => {
@@ -5239,19 +5209,12 @@ impl<'a> SectionReader<'a> {
                     points.push(fields.point3(section, 10));
                 }
                 ObjectContextKind::Leader(LeaderContext {
-                    points,
-                    x_direction: fields.point3(section, 11),
-                    annotation_enabled: fields.bool(section, 290),
-                    insertion_offset: fields.point3(section, 12),
-                    endpoint_projection: fields.point3(section, 13),
-                })
-            }
-            "ACDB_FCFOBJECTCONTEXTDATA_CLASS" => {
-                let section = "AcDbFcfObjectContextData";
-                ObjectContextKind::Fcf {
-                    location: fields.point3(section, 10),
+                    vertices: points,
                     horizontal_direction: fields.point3(section, 11),
-                }
+                    flag: fields.bool(section, 290),
+                    block_offset: fields.point3(section, 12),
+                    annotation_offset: fields.point3(section, 13),
+                })
             }
             "ACDB_HATCHSCALECONTEXTDATA_CLASS" => {
                 ObjectContextKind::HatchScale(class_dxf_hatch_scale_context(&mut fields))
@@ -5262,9 +5225,9 @@ impl<'a> SectionReader<'a> {
                 ObjectContextKind::HatchView(crate::objects::HatchViewContext {
                     hatch,
                     view: fields.handle(section, 330),
-                    view_normal: fields.point3(section, 10),
-                    view_rotation: fields.f64(section, 51).to_radians(),
-                    evaluate_hatch: fields.bool(section, 290),
+                    normal: fields.point3(section, 10),
+                    rotation: fields.f64(section, 51).to_radians(),
+                    flag: fields.bool(section, 290),
                 })
             }
             _ => ObjectContextKind::Opaque,

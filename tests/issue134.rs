@@ -417,7 +417,6 @@ fn valid_mleader_context_still_decodes_to_fields_without_recovery() {
         .insert(scale_handle, ObjectType::Scale(scale));
     let auxiliary = source.allocate_handle();
     let mut context = acadrust::entities::MultiLeaderAnnotContext::new();
-    context.standalone_uses_root_flags = true;
     context.set_text_content("issue134", acadrust::types::Vector3::new(1.0, 2.0, 3.0));
     let object = ObjectContextData {
         handle: auxiliary,

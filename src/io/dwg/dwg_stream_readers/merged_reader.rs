@@ -315,16 +315,6 @@ impl DwgMergedReader {
         count
     }
 
-    pub(crate) fn read_count(&mut self) -> i32 {
-        let count = self.read_bit_long();
-        self.checked_count(i64::from(count)) as i32
-    }
-
-    pub(crate) fn read_short_count(&mut self) -> i16 {
-        let count = self.read_bit_short();
-        self.checked_count(i64::from(count)) as i16
-    }
-
     pub(crate) fn checked_main_count(&self, count: i64, bits_per_item: i64) -> i64 {
         if self.has_error() {
             return 0;

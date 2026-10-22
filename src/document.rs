@@ -5149,7 +5149,7 @@ impl CadDocument {
                                 remap_object_handle(&mut hatch.view);
                             }
                             crate::objects::ObjectContextKind::MTextAttribute(attribute) => {
-                                if let Some(context) = attribute.context.as_mut() {
+                                if let Some(context) = attribute.mtext.as_mut() {
                                     remap_object_handle(&mut context.scale);
                                 }
                             }

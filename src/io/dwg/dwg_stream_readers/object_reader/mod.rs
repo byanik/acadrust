@@ -20,6 +20,7 @@ pub mod dgn_linestyle;
 pub mod dynamic_block;
 pub mod entities;
 pub mod field;
+pub mod object_context;
 pub mod objects;
 pub mod tables;
 

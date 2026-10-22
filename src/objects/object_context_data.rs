@@ -1,188 +1,141 @@
-//! Annotative per-object context data (`AcDb*ObjectContextData`).
+//! Annotative representations: the per-scale context objects of an annotative object.
 //!
-//! An annotative entity stores one *representation per annotation scale* in a
-//! leaf object hung off its extension dictionary, via the chain
-//! `entity xdict → "AcDbContextDataManager" → "ACDB_ANNOTATIONSCALES" → "*An"`.
-//! Each leaf is a concrete `ACDB_<TYPE>OBJECTCONTEXTDATA_CLASS` object sharing a
-//! common base:
+//! An annotative object keeps one context object per annotation scale. They are found through its
+//! extension dictionary: `AcDbContextDataManager` → `ACDB_ANNOTATIONSCALES` → one entry per scale.
+//! Every context names the `AcDbScale` (SCALE object) it belongs to; exactly one of an object's
+//! contexts is its default, whose placement equals the object's own fields.
 //!
-//! - `AcDbObjectContextData`: `70` class_version (BS), `290` is_default (B).
-//! - `AcDbAnnotScaleObjectContextData`: `340` handle → the `AcDbScale` this
-//!   representation applies to (rides the object handle stream).
-//!
-//! followed by a type-specific placement payload ([`ObjectContextKind`]).
-//!
-//! Recognised context classes are decoded and encoded from the semantic fields
-//! below, including cross-version saves.
+//! These types and the DWG decoder that fills them (fork patch A1) were re-derived from the ODA
+//! document (reference only: the common AcDbObjectContextData and AcDbAnnotScaleObjectContextData
+//! fields and MLeaderAnnotContext), ACadSharp (MIT: the common fields and the block reference
+//! payload), the DXF group codes of public drawings and the bit traces of every context record of the
+//! public and further corpora, each default context checked against its object's own fields.
+//! See PROVENANCE.md "A1 provenance". Classes for which no record was available (feature control
+//! frames, ordinate and large radial dimensions) are not modelled: the DWG reader keeps such records
+//! verbatim as unknown objects and the DXF reader as [`ObjectContextKind::Opaque`].
 
+use crate::entities::{BoundaryPath, HatchPatternLine};
 use crate::types::{Handle, Vector2, Vector3};
 
-/// A per-scale annotative representation (`AcDb*ObjectContextData` leaf).
+/// One annotative representation (`ACDB_<KIND>OBJECTCONTEXTDATA_CLASS` and the two hatch context
+/// classes).
+///
+/// DWG: the common object data, then `BS` class version (DXF 70; 3 or 4 in every record seen),
+/// `B` default (DXF 290) and the class payload; the handle stream holds the scale (hard pointer,
+/// DXF 340) first, then the payload's own handles.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ObjectContextData {
-    /// Object handle.
+    /// Handle of this context object.
     pub handle: Handle,
-    /// Owner handle — the `ACDB_ANNOTATIONSCALES` dictionary that lists this leaf.
+    /// Owner: the `ACDB_ANNOTATIONSCALES` dictionary of the annotative object.
     pub owner_handle: Handle,
-    /// Persistent reactors (real leaves carry one back to the owning dictionary).
+    /// Reactor handles.
     pub reactors: Vec<Handle>,
-    /// Extension dictionary handle, if any.
+    /// Extension dictionary, if any.
     pub xdictionary_handle: Option<Handle>,
-
-    /// `AcDbObjectContextData` class_version (DXF 70). Real R2018 files write 4;
-    /// LibreDWG's default is 3. Preserved on read.
+    /// Class version (DXF 70).
     pub class_version: i16,
-    /// `AcDbObjectContextData` is_default flag (DXF 290) — set on the native rep.
+    /// The object's default representation (DXF 290): its placement is the object's own.
     pub is_default: bool,
-    /// `AcDbAnnotScaleObjectContextData` scale handle (DXF 340) → an `AcDbScale`
-    /// in `ACAD_SCALELIST`.
+    /// The `AcDbScale` this representation is drawn at (DXF 340).
     pub scale: Handle,
-
-    /// Type-specific placement payload.
+    /// The class payload.
     pub kind: ObjectContextKind,
 }
 
-/// The type-specific placement payload of an annotative context leaf. Field
-/// layouts follow LibreDWG `dwg2.spec` (the binary-canonical order).
+/// The class payload of a context object.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ObjectContextKind {
-    /// Bare `AcDbAnnotScaleObjectContextData` leaf.
+    /// `ACDB_ANNOTSCALEOBJECTCONTEXTDATA_CLASS`: no payload after the scale.
     AnnotScale,
-
-    /// `AcDbBlkRefObjectContextData` (`ACDB_BLKREFOBJECTCONTEXTDATA_CLASS`,
-    /// class 533): per-scale placement of an annotative block INSERT.
-    ///
-    /// DWG order after the shared base: `BD rotation(50)`, `3BD insertion(10)`,
-    /// `BD x_scale(41)`, `BD y_scale(42)`, `BD z_scale(43)`.
+    /// `ACDB_BLKREFOBJECTCONTEXTDATA_CLASS`: `BD` rotation, `3BD` insertion point, three `BD`
+    /// scale factors (X, Y, Z).
     BlkRef {
-        /// Rotation, radians (DXF 50).
         rotation: f64,
-        /// Insertion point (DXF 10/20/30).
         insertion: Vector3,
-        /// Per-axis scale (DXF 41/42/43).
-        scale_factor: Vector3,
+        scale: Vector3,
     },
-
-    /// `AcDbTextObjectContextData` (`ACDB_TEXTOBJECTCONTEXTDATA_CLASS`):
-    /// per-scale placement of annotative single-line TEXT/ATTRIB/ATTDEF.
-    ///
-    /// DWG order after the shared base: `BS horizontal_mode(70)`,
-    /// `BD rotation(50)`, `2RD ins_pt(10)`, `2RD alignment_pt(11)`.
+    /// `ACDB_TEXTOBJECTCONTEXTDATA_CLASS`: `BS` horizontal mode (DXF 70), `BD` rotation (50),
+    /// `2RD` insertion point (10), `2RD` alignment point (11). The height is not stored.
     Text {
-        /// Horizontal justification mode (DXF 70).
         horizontal_mode: i16,
-        /// Rotation, radians (DXF 50).
         rotation: f64,
-        /// Insertion point, 2D only (DXF 10/20).
         insertion: Vector2,
-        /// Alignment point, 2D only (DXF 11/21).
         alignment: Vector2,
     },
-
-    /// `AcDbMTextObjectContextData` (`ACDB_MTEXTOBJECTCONTEXTDATA_CLASS`):
-    /// per-scale placement of annotative MTEXT.
-    ///
-    /// DWG order after the shared base: `BL attachment(70)`, then — note the
-    /// binary stream stores `x_axis_dir` **before** `ins_pt` (LibreDWG flags the
-    /// reversed order an "ODA bug"; DXF emits them the other way) — `3BD
-    /// x_axis_dir`, `3BD ins_pt`, `BD rect_width(40)`, `BD rect_height(41)`,
-    /// `BD extents_width(42)`, `BD extents_height(43)`, `BL column_type(71)`,
-    /// and — only when `column_type != 0` — the column sub-fields.
+    /// `ACDB_MTEXTOBJECTCONTEXTDATA_CLASS`.
     MText(MTextContext),
-
-    /// A dimension per-scale context (`ACDB_<AL|ANG|DM|RA|RADIMLG|ORD>DIMOBJECTCONTEXTDATA_CLASS`).
-    ///
-    /// The shared base and aligned subtype are verified by native DWG→DWG→DWG
-    /// plus ODA conversion. The remaining subtype tails follow the same
-    /// Autodesk DXF field contract and LibreDWG binary layout; public fixtures
-    /// for those five tails are not currently available.
+    /// The five dimension classes this fork models (aligned, angular, diametric, radial).
     Dim(DimContext),
-
-    /// `AcDbMLeaderObjectContextData`; a standalone annotation context using
-    /// the same semantic payload as an inline [`MultiLeader`](crate::entities::MultiLeader).
+    /// `ACDB_MLEADEROBJECTCONTEXTDATA_CLASS`: a whole MLeaderAnnotContext, as a MULTILEADER
+    /// entity carries its own.
     MLeader(crate::entities::multileader::MultiLeaderAnnotContext),
-
-    /// Annotative MTEXT attribute placement and optional embedded scale.
+    /// `ACDB_MTEXTATTRIBUTEOBJECTCONTEXTDATA_CLASS` (ATTRIB and ATTDEF).
     MTextAttribute(MTextAttributeContext),
-
-    /// Annotative LEADER vertex and direction data.
+    /// `ACDB_LEADEROBJECTCONTEXTDATA_CLASS`.
     Leader(LeaderContext),
-
-    /// Annotative feature-control-frame placement.
-    Fcf {
-        location: Vector3,
-        horizontal_direction: Vector3,
-    },
-
-    /// Per-scale hatch pattern and boundary-loop metadata.
+    /// `ACDB_HATCHSCALECONTEXTDATA_CLASS`.
     HatchScale(HatchScaleContext),
-
-    /// Per-view hatch context. This extends the complete per-scale hatch
-    /// payload with the target view and its projection parameters.
+    /// `ACDB_HATCHVIEWCONTEXTDATA_CLASS`.
     HatchView(HatchViewContext),
-
-    /// A context leaf whose type is recognised as annotation-context but whose
-    /// placement payload is not yet modeled.
+    /// A context class this fork does not model (read from DXF): the common fields only.
     Opaque,
 }
 
-/// Shared `AcDbHatchObjectContextData` payload used by both hatch context
-/// classes. Pattern-line angles are stored in radians in memory.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct HatchScaleContext {
-    pub pattern_lines: Vec<crate::entities::HatchPatternLine>,
-    pub pattern_scale: f64,
-    pub pattern_base: Vector3,
-    pub loops: Vec<HatchLoopContext>,
-}
-
-/// Per-boundary-loop data in an annotative hatch context.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct HatchLoopContext {
-    pub loop_type: i32,
-    pub supports_context: bool,
-    pub boundary: Option<crate::entities::BoundaryPath>,
-}
-
-/// `AcDbHatchViewContextData` payload.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct HatchViewContext {
-    pub hatch: HatchScaleContext,
-    pub view: Handle,
-    pub view_normal: Vector3,
-    pub view_rotation: f64,
-    pub evaluate_hatch: bool,
-}
-
-/// MTEXT per-scale placement payload (`AcDbMTextObjectContextData`).
+/// `ACDB_MTEXTOBJECTCONTEXTDATA_CLASS` payload: `BL` attachment (DXF 70), `3BD` x direction (10),
+/// `3BD` insertion point (11), `BD` defined width (40), `BD` defined height (41), `BD` extents
+/// width (42), `BD` extents height (43), `BS` column type (71) and, for a column type other than 0,
+/// the columns. The text height is not stored.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MTextContext {
-    /// Attachment point (DXF 70) — `BL` (bit-long), not `BS`.
     pub attachment: i32,
-    /// Text X-axis direction (DXF 10/20/30, as AutoCAD writes it; stored first in binary).
-    pub x_axis_dir: Vector3,
-    /// Insertion point (DXF 11/21/31, as AutoCAD writes it; stored second in binary).
+    pub x_direction: Vector3,
     pub insertion: Vector3,
-    /// Reference rectangle width (DXF 40).
-    pub rect_width: f64,
-    /// Reference rectangle height (DXF 41).
-    pub rect_height: f64,
-    /// Extents width (DXF 42).
+    pub defined_width: f64,
+    pub defined_height: f64,
     pub extents_width: f64,
-    /// Extents height (DXF 43).
     pub extents_height: f64,
-    /// Column type (DXF 71): 0 none, 1 static, 2 dynamic.
-    pub column_type: i32,
-    /// Column sub-fields, present only when `column_type != 0`.
+    /// 0 none, 1 static, 2 dynamic.
+    pub column_type: i16,
     pub columns: Option<MTextColumns>,
 }
 
+impl Default for MTextContext {
+    fn default() -> Self {
+        MTextContext {
+            attachment: 1,
+            x_direction: Vector3::new(1.0, 0.0, 0.0),
+            insertion: Vector3::new(0.0, 0.0, 0.0),
+            defined_width: 0.0,
+            defined_height: 0.0,
+            extents_width: 0.0,
+            extents_height: 0.0,
+            column_type: 0,
+            columns: None,
+        }
+    }
+}
+
+/// Columns of an MTEXT context: `BL` count (72), `BD` width (44), `BD` gutter (45), `B` auto
+/// height (73), `B` flow reversed (74), and one `BD` height (46) per column when the type is
+/// dynamic and the height is not automatic.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MTextColumns {
+    pub count: i32,
+    pub width: f64,
+    pub gutter: f64,
+    pub auto_height: bool,
+    pub flow_reversed: bool,
+    pub heights: Vec<f64>,
+}
+
+/// `ACDB_MTEXTATTRIBUTEOBJECTCONTEXTDATA_CLASS` payload: `BS` horizontal mode, `BD` rotation,
+/// `2RD` insertion point, `2RD` alignment point, `B` multiline, and for a multiline attribute an
+/// embedded MTEXT context.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MTextAttributeContext {
@@ -190,158 +143,126 @@ pub struct MTextAttributeContext {
     pub rotation: f64,
     pub insertion: Vector2,
     pub alignment: Vector2,
-    pub enable_context: bool,
-    pub context: Option<EmbeddedMTextContext>,
+    pub multiline: bool,
+    pub mtext: Option<EmbeddedMTextContext>,
 }
 
-/// Embedded `AcDbMTextObjectContextData` carried by an MTEXT attribute
-/// context. It has its own object-context base and annotation-scale handle.
+/// The MTEXT context embedded in a multiline attribute's context. DWG: the object prefix of a
+/// non-graphical object without its type and handle (`BL` reactor count; R2004+ `B` no extension
+/// dictionary; R2013+ `B` binary data flag), `BS` version, `B` default, the MTEXT payload; its
+/// handles (owner, reactors, extension dictionary, scale) follow the outer context's.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EmbeddedMTextContext {
-    /// Embedded object's owner. Native records normally use null.
     pub owner_handle: Handle,
-    /// Embedded object's persistent reactors.
     pub reactors: Vec<Handle>,
-    /// Embedded object's extension dictionary.
     pub xdictionary_handle: Option<Handle>,
-    /// R2013+ embedded binary-data flag.
-    pub has_binary_data: bool,
+    pub has_ds_data: bool,
     pub class_version: i16,
     pub is_default: bool,
     pub scale: Handle,
     pub mtext: MTextContext,
 }
 
+/// `ACDB_LEADEROBJECTCONTEXTDATA_CLASS` payload: `BL` vertex count (DXF 70), one `3BD` per vertex
+/// (10), `3BD` horizontal direction (11), `B` (290), `3BD` block offset (12), `3BD` annotation
+/// offset (13).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LeaderContext {
-    pub points: Vec<Vector3>,
-    pub x_direction: Vector3,
-    pub annotation_enabled: bool,
-    pub insertion_offset: Vector3,
-    pub endpoint_projection: Vector3,
+    pub vertices: Vec<Vector3>,
+    pub horizontal_direction: Vector3,
+    pub flag: bool,
+    pub block_offset: Vector3,
+    pub annotation_offset: Vector3,
 }
 
-/// Dimension per-scale context (`AcDbDimensionObjectContextData` base + a
-/// subtype). DWG data-stream order (after the shared class_version/is_default):
-/// `2RD def_pt(10)`, `B is_def_textloc(294)`, `BD text_rotation(140)`,
-/// `B b293`, `B dimtofl(298)`, `B dimosxd(291)`, `B dimatfit(70)`,
-/// `B dimtix(292)`, `B dimtmove(71)`, `RC override_code(280)`,
-/// `B has_arrow2(295)`, `B flip_arrow2(296)`, `B flip_arrow1(297)`, then the
-/// subtype point(s). Handle stream: `scale`(soft-owner) then `block`(hard-ptr).
+/// Dimension context payload: `2RD` text location, `B`, `BD` text rotation, 17 single bits (their
+/// meaning is not needed to draw the representation and was not established), then the class's
+/// points. The handle stream holds the dimension block of this scale after the scale.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimContext {
-    /// Text location (DXF 10/20; the Z=30 is a constant 0.0 in DXF).
-    pub def_pt: Vector2,
-    /// Text location is user-defined (DXF 294).
-    pub is_def_textloc: bool,
-    /// Dimension text rotation (DXF 140).
-    pub text_rotation: f64,
-    /// The dimension's block reference (hard pointer; DXF 2 in the DXF path).
+    /// The anonymous dimension block drawn at this scale.
     pub block: Handle,
-    /// Reserved bit (DXF 293 in the DXF path).
-    pub b293: bool,
-    /// DIMTOFL override (DXF 298).
-    pub dimtofl: bool,
-    /// DIMOSXD override (DXF 291).
-    pub dimosxd: bool,
-    /// DIMATFIT override (DXF 70 second occurrence).
-    pub dimatfit: bool,
-    /// DIMTIX override (DXF 292).
-    pub dimtix: bool,
-    /// DIMTMOVE override (DXF 71).
-    pub dimtmove: bool,
-    /// Override code (DXF 280) — a raw byte.
-    pub override_code: u8,
-    /// Second-arrow present (DXF 295).
-    pub has_arrow2: bool,
-    /// Flip second arrow (DXF 296).
-    pub flip_arrow2: bool,
-    /// Flip first arrow (DXF 297).
-    pub flip_arrow1: bool,
-    /// Subtype-specific point(s).
+    pub text_location: Vector2,
+    pub flag: bool,
+    pub text_rotation: f64,
+    /// The 17 bits after the text rotation, the first read in bit 16.
+    pub bits: u32,
     pub subtype: DimSubtype,
 }
 
-/// The dimension subtype, selecting the concrete context class and its extra
-/// `3BD` point field(s) (all after the shared dimension base).
+/// The class-specific points of a dimension context.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DimSubtype {
-    /// `ACDB_ALDIMOBJECTCONTEXTDATA_CLASS`: `3BD dimline_pt(11)`.
-    Aligned { dimline_pt: Vector3 },
-    /// `ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS`: `3BD arc_pt(11)`.
-    Angular { arc_pt: Vector3 },
-    /// `ACDB_DMDIMOBJECTCONTEXTDATA_CLASS`: `3BD first_arc_pt(11)`, `3BD def_pt(12)`.
+    /// `ACDB_ALDIMOBJECTCONTEXTDATA_CLASS` (aligned and rotated): `3BD`, equal to the dimension's
+    /// definition point in the default context.
+    Aligned { definition_point: Vector3 },
+    /// `ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS`: one `3BD`.
+    Angular { point: Vector3 },
+    /// `ACDB_DMDIMOBJECTCONTEXTDATA_CLASS`: two `3BD`, the second equal to the definition point.
     Diametric {
-        first_arc_pt: Vector3,
-        def_pt: Vector3,
+        point: Vector3,
+        definition_point: Vector3,
     },
-    /// `ACDB_RADIMOBJECTCONTEXTDATA_CLASS`: `3BD first_arc_pt(11)`.
-    Radial { first_arc_pt: Vector3 },
-    /// `ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS`: `3BD ovr_center(12)`, `3BD jog_point(13)`.
-    RadialLarge {
-        ovr_center: Vector3,
-        jog_point: Vector3,
-    },
-    /// `ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS`: `3BD feature_location_pt(11)`, `3BD leader_endpt(12)`.
-    Ordinate {
-        feature_location_pt: Vector3,
-        leader_endpt: Vector3,
-    },
+    /// `ACDB_RADIMOBJECTCONTEXTDATA_CLASS`: `3BD`, equal to the definition point.
+    Radial { definition_point: Vector3 },
 }
 
 impl DimSubtype {
-    /// The concrete DXF class name for this subtype.
+    /// The DXF class name of a context with these points.
     pub fn class_name(&self) -> &'static str {
         match self {
             DimSubtype::Aligned { .. } => "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS",
             DimSubtype::Angular { .. } => "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS",
             DimSubtype::Diametric { .. } => "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS",
             DimSubtype::Radial { .. } => "ACDB_RADIMOBJECTCONTEXTDATA_CLASS",
-            DimSubtype::RadialLarge { .. } => "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS",
-            DimSubtype::Ordinate { .. } => "ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS",
-        }
-    }
-
-    /// The dimension subclass marker for this subtype.
-    pub fn subclass_marker(&self) -> &'static str {
-        match self {
-            DimSubtype::Aligned { .. } => "AcDbAlignedDimensionObjectContextData",
-            DimSubtype::Angular { .. } => "AcDbAngularDimensionObjectContextData",
-            DimSubtype::Diametric { .. } => "AcDbDiametricDimensionObjectContextData",
-            DimSubtype::Radial { .. } => "AcDbRadialDimensionObjectContextData",
-            DimSubtype::RadialLarge { .. } => "AcDbRadialDimensionLargeObjectContextData",
-            DimSubtype::Ordinate { .. } => "AcDbOrdinateDimensionObjectContextData",
         }
     }
 }
 
-/// MTEXT column layout, present only when `column_type != 0`.
+/// `ACDB_HATCHSCALECONTEXTDATA_CLASS` payload: `BL` pattern line count, per line `BD` angle,
+/// `BD` `BD` base point, `BD` `BD` offset, `BS` dash count and one `BD` per dash; `BD` factor (1.0
+/// in every record seen), `3BD` direction (a unit vector in every record seen), `BL` loop count and
+/// the loops.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HatchScaleContext {
+    pub pattern_lines: Vec<HatchPatternLine>,
+    pub factor: f64,
+    pub direction: Vector3,
+    pub loops: Vec<HatchLoopContext>,
+}
+
+/// One loop of a hatch context: `BL` path flags, `B` shared (when clear, the boundary path follows
+/// in the hatch path layout without boundary object handles).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MTextColumns {
-    /// Number of column heights (DXF 72).
-    pub num_heights: i32,
-    /// Column width (DXF 44).
-    pub width: f64,
-    /// Gutter width (DXF 45).
-    pub gutter: f64,
-    /// Auto-height flag (DXF 73).
-    pub auto_height: bool,
-    /// Flow-reversed flag (DXF 74).
-    pub flow_reversed: bool,
-    /// Explicit per-column heights (DXF 46) — present when
-    /// `!auto_height && column_type == 2`.
-    pub heights: Vec<f64>,
+pub struct HatchLoopContext {
+    pub path_flags: i32,
+    pub shared: bool,
+    pub boundary: Option<BoundaryPath>,
 }
 
-impl ObjectContextData {
-    /// The DXF class / record name for this leaf's kind.
-    pub fn class_name(&self) -> &'static str {
-        match &self.kind {
+/// `ACDB_HATCHVIEWCONTEXTDATA_CLASS` payload: the hatch-scale payload, `3BD` normal, `BD`
+/// rotation, `B`; the handle stream holds the view (soft pointer) after the scale.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HatchViewContext {
+    pub hatch: HatchScaleContext,
+    pub view: Handle,
+    pub normal: Vector3,
+    pub rotation: f64,
+    pub flag: bool,
+}
+
+impl ObjectContextKind {
+    /// The DXF class name of a context with this payload (`None` for [`ObjectContextKind::Opaque`],
+    /// whose class the payload does not say).
+    pub fn class_name(&self) -> Option<&'static str> {
+        Some(match self {
             ObjectContextKind::AnnotScale => "ACDB_ANNOTSCALEOBJECTCONTEXTDATA_CLASS",
             ObjectContextKind::BlkRef { .. } => "ACDB_BLKREFOBJECTCONTEXTDATA_CLASS",
             ObjectContextKind::Text { .. } => "ACDB_TEXTOBJECTCONTEXTDATA_CLASS",
@@ -350,10 +271,19 @@ impl ObjectContextData {
             ObjectContextKind::MLeader(_) => "ACDB_MLEADEROBJECTCONTEXTDATA_CLASS",
             ObjectContextKind::MTextAttribute(_) => "ACDB_MTEXTATTRIBUTEOBJECTCONTEXTDATA_CLASS",
             ObjectContextKind::Leader(_) => "ACDB_LEADEROBJECTCONTEXTDATA_CLASS",
-            ObjectContextKind::Fcf { .. } => "ACDB_FCFOBJECTCONTEXTDATA_CLASS",
             ObjectContextKind::HatchScale(_) => "ACDB_HATCHSCALECONTEXTDATA_CLASS",
             ObjectContextKind::HatchView(_) => "ACDB_HATCHVIEWCONTEXTDATA_CLASS",
-            ObjectContextKind::Opaque => "ACDB_OBJECTCONTEXTDATA_CLASS",
-        }
+            ObjectContextKind::Opaque => return None,
+        })
+    }
+}
+
+impl ObjectContextData {
+    /// The DXF class name of this context; an [`ObjectContextKind::Opaque`] one is written as
+    /// the plain annotation-scale class (its own payload is not known).
+    pub fn class_name(&self) -> &'static str {
+        self.kind
+            .class_name()
+            .unwrap_or("ACDB_ANNOTSCALEOBJECTCONTEXTDATA_CLASS")
     }
 }
