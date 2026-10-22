@@ -733,3 +733,115 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod bit_vector_tests {
+    //! Payloads assembled bit by bit from the DWG bit codes themselves (BS: `01` + one byte, `10`
+    //! zero; BD: `00` + 8 raw bytes, `01` one, `10` zero; RD: 8 raw bytes; bytes most significant bit
+    //! first, doubles little-endian), not through the fork's bit writer, so a codec slip shared by
+    //! the writer and the reader cannot hide (P4-M4 review Minor 13).
+    use super::*;
+
+    const D: DxfVersion = DxfVersion::AC1015;
+
+    #[derive(Default)]
+    struct Bits(Vec<bool>);
+
+    impl Bits {
+        fn code(&mut self, s: &str) -> &mut Self {
+            self.0.extend(s.chars().map(|c| c == '1'));
+            self
+        }
+        fn byte(&mut self, b: u8) -> &mut Self {
+            self.0.extend((0..8).rev().map(|i| b >> i & 1 == 1));
+            self
+        }
+        fn rd(&mut self, v: f64) -> &mut Self {
+            for b in v.to_le_bytes() {
+                self.byte(b);
+            }
+            self
+        }
+        /// BD with the full-double code.
+        fn bd(&mut self, v: f64) -> &mut Self {
+            self.code("00").rd(v)
+        }
+        fn bytes(&self) -> (Vec<u8>, i64) {
+            let mut out = vec![0u8; self.0.len().div_ceil(8)];
+            for (i, &b) in self.0.iter().enumerate() {
+                if b {
+                    out[i / 8] |= 0x80 >> (i % 8);
+                }
+            }
+            (out, self.0.len() as i64)
+        }
+    }
+
+    fn decode(class: &str, bits: &Bits) -> (Option<ObjectContextKind>, i64) {
+        let (data, n) = bits.bytes();
+        let mut r = DwgMergedReader::new(data, D, n);
+        let k = read_payload(&mut r, DwgVersion::AC15, D, class);
+        (k, r.main_remaining_bits())
+    }
+
+    #[test]
+    fn text_payload_from_raw_bits() {
+        let mut b = Bits::default();
+        // BS 2, BD 0.5, 2RD (1, 2), 2RD (0, -3)
+        b.code("01").byte(2).bd(0.5).rd(1.0).rd(2.0).rd(0.0).rd(-3.0);
+        let (k, left) = decode("ACDB_TEXTOBJECTCONTEXTDATA_CLASS", &b);
+        assert_eq!(left, 0);
+        assert_eq!(
+            k,
+            Some(ObjectContextKind::Text {
+                horizontal_mode: 2,
+                rotation: 0.5,
+                insertion: Vector2::new(1.0, 2.0),
+                alignment: Vector2::new(0.0, -3.0),
+            })
+        );
+    }
+
+    #[test]
+    fn block_reference_payload_from_raw_bits() {
+        let mut b = Bits::default();
+        // BD 0.25 rotation; 3BD (5, 6, 0); BD 2, BD 1 (code 01), BD 0 (code 10)
+        b.bd(0.25).bd(5.0).bd(6.0).code("10").bd(2.0).code("01").code("10");
+        let (k, left) = decode("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS", &b);
+        assert_eq!(left, 0);
+        assert_eq!(
+            k,
+            Some(ObjectContextKind::BlkRef {
+                rotation: 0.25,
+                insertion: Vector3::new(5.0, 6.0, 0.0),
+                scale: Vector3::new(2.0, 1.0, 0.0),
+            })
+        );
+    }
+
+    #[test]
+    fn leader_payload_from_raw_bits() {
+        let mut b = Bits::default();
+        // BL count 2 (`01` + byte), two 3BD vertices, 3BD direction (1, 0, 0), B 1, two 3BD offsets
+        b.code("01").byte(2);
+        b.bd(1.0).bd(2.0).code("10");
+        b.bd(3.0).bd(4.0).code("10");
+        b.code("01").code("10").code("10");
+        b.code("1");
+        b.code("10").code("10").code("10");
+        b.bd(0.5).code("10").code("10");
+        let (k, left) = decode("ACDB_LEADEROBJECTCONTEXTDATA_CLASS", &b);
+        assert_eq!(left, 0);
+        let Some(ObjectContextKind::Leader(l)) = k else {
+            panic!("{k:?}");
+        };
+        assert_eq!(
+            l.vertices,
+            vec![Vector3::new(1.0, 2.0, 0.0), Vector3::new(3.0, 4.0, 0.0)]
+        );
+        assert_eq!(l.horizontal_direction, Vector3::new(1.0, 0.0, 0.0));
+        assert!(l.flag);
+        assert_eq!(l.block_offset, Vector3::new(0.0, 0.0, 0.0));
+        assert_eq!(l.annotation_offset, Vector3::new(0.5, 0.0, 0.0));
+    }
+}
