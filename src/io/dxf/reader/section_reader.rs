@@ -5005,7 +5005,8 @@ impl<'a> SectionReader<'a> {
             "ACDB_BLKREFOBJECTCONTEXTDATA_CLASS" => {
                 let section = "AcDbBlkRefObjectContextData";
                 ObjectContextKind::BlkRef {
-                    rotation: fields.f64(section, 50),
+                    // degrees in DXF, as INSERT's 50 (P4-M4 review Important 4)
+                    rotation: fields.f64(section, 50).to_radians(),
                     insertion: fields.point3(section, 10),
                     scale: Vector3::new(
                         fields.f64(section, 41),

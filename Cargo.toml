@@ -79,6 +79,11 @@ path = "tests/annotative_context_encoder.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "annotative_context_dxf"
+path = "tests/annotative_context_dxf.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "anonymous_block_names"
 path = "tests/anonymous_block_names.rs"
 

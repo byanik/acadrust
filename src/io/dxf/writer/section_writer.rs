@@ -7873,7 +7873,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 scale: scale_factor,
             } => {
                 self.writer.write_subclass("AcDbBlkRefObjectContextData")?;
-                self.writer.write_double(50, *rotation)?;
+                self.writer.write_double(50, rotation.to_degrees())?;
                 self.writer.write_double(10, insertion.x)?;
                 self.writer.write_double(20, insertion.y)?;
                 self.writer.write_double(30, insertion.z)?;
