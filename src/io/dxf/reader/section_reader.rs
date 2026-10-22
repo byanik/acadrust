@@ -25,13 +25,14 @@ const DXF_COUNT_RESERVE_CAP: usize = 1024;
 /// pattern-boundary reader below).
 const DXF_MAX_LIST_COUNT: i32 = 100_000;
 
-/// Build a [`Matrix4`] from 12 doubles holding a 4×3 transform in DXF
-fn matrix_from_column_major(v: &[f64]) -> Matrix4 {
+/// Build a [`Matrix4`] from the 12 group-40 doubles of a SPATIAL_FILTER matrix: three rows of
+/// four, the translation last in each row (fork patch X1; AutoCAD's order, as ezdxf reads it).
+fn matrix_from_rows(v: &[f64]) -> Matrix4 {
     Matrix4 {
         m: [
-            [v[0], v[3], v[6], v[9]],
-            [v[1], v[4], v[7], v[10]],
-            [v[2], v[5], v[8], v[11]],
+            [v[0], v[1], v[2], v[3]],
+            [v[4], v[5], v[6], v[7]],
+            [v[8], v[9], v[10], v[11]],
             [0.0, 0.0, 0.0, 1.0],
         ],
     }
@@ -8750,8 +8751,8 @@ impl<'a> SectionReader<'a> {
     ///   71  display enabled flag
     ///   72  front clip flag, 40 front clip distance (only when 72 set)
     ///   73  back clip flag, 41 back clip distance (only when 73 set)
-    ///   40 ×12  inverse block transform (column-major 4×3)
-    ///   40 ×12  clip bound transform (column-major 4×3)
+    ///   40 ×12  inverse block transform (3×4, row by row; fork patch X1)
+    ///   40 ×12  clip bound transform (3×4, row by row)
     ///
     /// The front clip distance reuses code 40, so the first code-40 value is
     /// treated as the front distance only while the front flag is set and no
@@ -8844,10 +8845,10 @@ impl<'a> SectionReader<'a> {
             }
         }
         if mat.len() >= 12 {
-            obj.inverse_block_transform = matrix_from_column_major(&mat[0..12]);
+            obj.inverse_block_transform = matrix_from_rows(&mat[0..12]);
         }
         if mat.len() >= 24 {
-            obj.clip_bound_transform = matrix_from_column_major(&mat[12..24]);
+            obj.clip_bound_transform = matrix_from_rows(&mat[12..24]);
         }
         Ok(Some(obj))
     }
@@ -22086,14 +22087,14 @@ mod tests {
     }
 
     #[test]
-    fn spatial_filter_matrix_is_column_major() {
+    fn spatial_filter_matrix_is_stored_row_by_row() {
+        // fork patch X1: three rows of four, the translation last in each row
         let v = [
-            1.0, 0.0, 0.0, // col 0 (X axis)
-            0.0, 1.0, 0.0, // col 1 (Y axis)
-            0.0, 0.0, 1.0, // col 2 (Z axis)
-            -200.0, -150.0, 0.0, // col 3 (translation)
+            1.0, 0.0, 0.0, -200.0, // row 0
+            0.0, 1.0, 0.0, -150.0, // row 1
+            0.0, 0.0, 1.0, 0.0, // row 2
         ];
-        let m = matrix_from_column_major(&v);
+        let m = matrix_from_rows(&v);
         assert_eq!(
             m.m,
             [

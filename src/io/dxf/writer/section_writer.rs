@@ -8761,8 +8761,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write a SPATIAL_FILTER object (block reference / XCLIP clip boundary).
     ///
     /// Inverse of [`read_spatial_filter`]. The two 4×3 transforms are emitted
-    /// as 12 code-40 doubles each, in column-major order, after the front/back
-    /// clip flags and distances.
+    /// as 12 code-40 doubles each, row by row (fork patch X1), after the
+    /// front/back clip flags and distances.
     fn write_spatial_filter(&mut self, obj: &SpatialFilter, document: &CadDocument) -> Result<()> {
         self.writer.write_string(0, "SPATIAL_FILTER")?;
         self.writer.write_handle(5, obj.handle)?;
@@ -8788,16 +8788,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if let Some(d) = obj.back_clip {
             self.writer.write_double(41, d)?;
         }
-        self.write_matrix_column_major(&obj.inverse_block_transform)?;
-        self.write_matrix_column_major(&obj.clip_bound_transform)?;
+        self.write_matrix_rows(&obj.inverse_block_transform)?;
+        self.write_matrix_rows(&obj.clip_bound_transform)?;
         Ok(())
     }
 
-    /// Write a 4×3 transform as 12 code-40 doubles in DXF column-major order
-    /// (4 columns of 3 rows; the bottom matrix row is implied).
-    fn write_matrix_column_major(&mut self, m: &crate::types::Matrix4) -> Result<()> {
-        for col in 0..4 {
-            for row in 0..3 {
+    /// Write a SPATIAL_FILTER transform as 12 code-40 doubles: three rows of four, the
+    /// translation last in each row (fork patch X1; the bottom matrix row is implied).
+    fn write_matrix_rows(&mut self, m: &crate::types::Matrix4) -> Result<()> {
+        for row in 0..3 {
+            for col in 0..4 {
                 self.writer.write_double(40, m.m[row][col])?;
             }
         }

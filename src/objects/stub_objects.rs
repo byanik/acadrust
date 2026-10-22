@@ -950,7 +950,9 @@ pub struct SpatialFilter {
     pub normal: Vector3,
     /// Origin of the clip boundary local coordinate system (code 11/21/31).
     pub origin: Vector3,
-    /// Clip boundary display enabled flag (code 71).
+    /// Code 71. The DXF reference calls it the clip boundary display flag;
+    /// it holds whether the clip is on (XCLIP ON/OFF), and ezdxf (MIT) reads
+    /// it as the clipping-enabled flag.
     pub display_enabled: bool,
     /// Front clipping plane distance (code 40), `Some` when the front clip
     /// flag (code 72) is set.
@@ -958,11 +960,15 @@ pub struct SpatialFilter {
     /// Back clipping plane distance (code 41), `Some` when the back clip
     /// flag (code 73) is set.
     pub back_clip: Option<f64>,
-    /// 4×3 matrix (column-major in DXF) transforming WCS points into the
-    /// block-definition coordinate system — the inverse block transform.
+    /// The inverse of the block reference's transform when the clip was
+    /// defined: WCS to block-definition coordinates. Stored as 12 doubles,
+    /// three rows of four (fork patch X1).
     pub inverse_block_transform: Matrix4,
-    /// 4×3 matrix transforming clip boundary points into the block reference
-    /// coordinate system.
+    /// WCS to the clip boundary's coordinate system (the UCS the boundary was
+    /// drawn in; it takes `origin` to 0). Stored like the inverse block
+    /// transform. A boundary point `p` lies at
+    /// `inverse_block_transform · clip_bound_transform⁻¹ · (p, 0)` in block
+    /// coordinates.
     pub clip_bound_transform: Matrix4,
 }
 

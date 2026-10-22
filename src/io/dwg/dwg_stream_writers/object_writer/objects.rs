@@ -266,11 +266,13 @@ fn encode_xrecord_entries(
     output
 }
 
-fn matrix_to_column_major(m: &crate::types::Matrix4) -> [f64; 12] {
+/// A SPATIAL_FILTER matrix as its 12 stored doubles: three rows of four, the translation last in
+/// each row (fork patch X1).
+fn matrix_to_rows(m: &crate::types::Matrix4) -> [f64; 12] {
     let mut out = [0.0; 12];
     let mut i = 0;
-    for col in 0..4 {
-        for row in 0..3 {
+    for row in 0..3 {
+        for col in 0..4 {
             out[i] = m.m[row][col];
             i += 1;
         }
@@ -2838,10 +2840,10 @@ impl<'a> DwgObjectWriter<'a> {
         if let Some(d) = sf.back_clip {
             self.writer.write_bit_double(d);
         }
-        for v in matrix_to_column_major(&sf.inverse_block_transform) {
+        for v in matrix_to_rows(&sf.inverse_block_transform) {
             self.writer.write_bit_double(v);
         }
-        for v in matrix_to_column_major(&sf.clip_bound_transform) {
+        for v in matrix_to_rows(&sf.clip_bound_transform) {
             self.writer.write_bit_double(v);
         }
 

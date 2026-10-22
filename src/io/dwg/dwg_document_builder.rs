@@ -6360,8 +6360,8 @@ impl DwgDocumentBuilder {
                     obj.front_clip = data.front_clip;
                     obj.back_clip = data.back_clip;
                     obj.inverse_block_transform =
-                        matrix_from_column_major(&data.inverse_block_transform);
-                    obj.clip_bound_transform = matrix_from_column_major(&data.clip_bound_transform);
+                        matrix_from_rows(&data.inverse_block_transform);
+                    obj.clip_bound_transform = matrix_from_rows(&data.clip_bound_transform);
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::SpatialFilter(obj),
@@ -7664,19 +7664,19 @@ mod tests {
     }
 
     #[test]
-    fn spatial_filter_matrix_is_column_major() {
+    fn spatial_filter_matrix_is_stored_row_by_row() {
+        // fork patch X1: three rows of four, the translation last in each row
         let v = [
-            1.0, 0.0, 0.0, //
-            0.0, 1.0, 0.0, //
-            0.0, 0.0, 1.0, //
-            -500.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, -500.0, //
+            0.0, 1.0, 0.0, 25.0, //
+            0.0, 0.0, 1.0, 0.0,
         ];
-        let m = matrix_from_column_major(&v);
+        let m = matrix_from_rows(&v);
         assert_eq!(
             m.m,
             [
                 [1.0, 0.0, 0.0, -500.0],
-                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 25.0],
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ]
@@ -7948,8 +7948,6 @@ fn decode_section_view_style(
     })
 }
 
-/// DWG stores the spatial-filter transforms row-major (unlike DXF code 40,
-/// which is column-major).
 /// Unique block record names for `Table<BlockRecord>`, which compares names
 /// case-insensitively.
 ///
@@ -8132,12 +8130,14 @@ mod dedupe_block_names_tests {
     }
 }
 
-fn matrix_from_column_major(v: &[f64; 12]) -> crate::types::Matrix4 {
+/// A SPATIAL_FILTER matrix from its 12 stored doubles: three rows of four, the translation last
+/// in each row (fork patch X1; the same order as DXF group 40).
+fn matrix_from_rows(v: &[f64; 12]) -> crate::types::Matrix4 {
     crate::types::Matrix4 {
         m: [
-            [v[0], v[3], v[6], v[9]],
-            [v[1], v[4], v[7], v[10]],
-            [v[2], v[5], v[8], v[11]],
+            [v[0], v[1], v[2], v[3]],
+            [v[4], v[5], v[6], v[7]],
+            [v[8], v[9], v[10], v[11]],
             [0.0, 0.0, 0.0, 1.0],
         ],
     }

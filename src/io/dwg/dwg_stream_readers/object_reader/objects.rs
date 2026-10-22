@@ -1837,9 +1837,9 @@ pub struct SpatialFilterData {
     pub display_enabled: bool,
     pub front_clip: Option<f64>,
     pub back_clip: Option<f64>,
-    /// 12 doubles, column-major 4×3 inverse block transform.
+    /// 12 doubles, the 3×4 inverse block transform row by row (fork patch X1).
     pub inverse_block_transform: [f64; 12],
-    /// 12 doubles, column-major 4×3 clip bound transform.
+    /// 12 doubles, the 3×4 clip bound transform row by row (fork patch X1).
     pub clip_bound_transform: [f64; 12],
 }
 
@@ -1850,8 +1850,8 @@ pub struct SpatialFilterData {
 /// (BS), front-clip flag (BS) + optional distance (BD), back-clip flag (BS) +
 /// optional distance (BD), then the inverse-block and clip-bound transforms as
 /// 12 doubles each (BD). The three flags mirror DXF codes 71/72/73 (i16), so
-/// they are bit-shorts, not single bits. The transforms use the same
-/// column-major layout as DXF code 40.
+/// they are bit-shorts, not single bits. The transforms are stored row
+/// by row, as DXF code 40 is (fork patch X1).
 pub fn read_spatial_filter(reader: &mut DwgMergedReader) -> SpatialFilterData {
     let mut d = SpatialFilterData::default();
     let num = safe_count(reader.read_bit_short() as i32, reader);
