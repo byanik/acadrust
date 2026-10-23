@@ -289,6 +289,93 @@ fn mtext_context_data_has_no_subclass_marker_and_autocad_point_codes() {
     assert_eq!(m.x_direction, Vector3::new(1.0, 0.0, 0.0));
 }
 
+/// A TEXT context as AutoCAD writes it: no AcDbTextObjectContextData marker, the
+/// fields straight after the annotation scale groups (an AutoCAD 2025 DXFIN of the
+/// marked form stops with "Missing DXF group code: 1" and discards the drawing).
+const AUTOCAD_TEXT_CONTEXT: &str = "  0\nSECTION\n  2\nOBJECTS\n  0\nACDB_TEXTOBJECTCONTEXTDATA_CLASS\n  5\n3C6\n102\n{ACAD_REACTORS\n330\n3C5\n102\n}\n330\n3C5\n100\nAcDbObjectContextData\n 70\n4\n290\n1\n100\nAcDbAnnotScaleObjectContextData\n340\nB7\n 70\n2\n 50\n30.0\n 10\n147.5\n 20\n10.25\n 11\n150.0\n 21\n12.5\n  0\nENDSEC\n  0\nEOF\n";
+
+#[test]
+fn text_context_data_has_no_subclass_marker() {
+    use acadrust::objects::{ObjectContextData, ObjectContextKind};
+    let mut doc = CadDocument::new();
+    let handle = doc.allocate_handle();
+    let context = ObjectContextData {
+        handle,
+        owner_handle: Handle::NULL,
+        reactors: Vec::new(),
+        xdictionary_handle: None,
+        class_version: 4,
+        is_default: true,
+        scale: Handle::NULL,
+        kind: ObjectContextKind::Text {
+            horizontal_mode: 2,
+            rotation: std::f64::consts::FRAC_PI_6,
+            insertion: Vector2::new(147.5, 10.25),
+            alignment: Vector2::new(150.0, 12.5),
+        },
+    };
+    doc.objects.insert(handle, ObjectType::ObjectContextData(context));
+    let pairs = write_pairs(&doc);
+    let rec = record(&pairs, handle);
+    assert!(
+        !rec.iter().any(|(_, v)| v == "AcDbTextObjectContextData"),
+        "AutoCAD rejects the marker: {rec:?}"
+    );
+    let after_scale: Vec<i32> = rec
+        .iter()
+        .skip_while(|(c, _)| *c != 340)
+        .skip(1)
+        .map(|(c, _)| *c)
+        .collect();
+    assert_eq!(after_scale, vec![70, 50, 10, 20, 11, 21], "{rec:?}");
+
+    let path = std::env::temp_dir().join("acadrust_text_context_rt.dxf");
+    std::fs::write(&path, DxfWriter::new(&doc).write_to_vec().unwrap()).unwrap();
+    let loaded = DxfReader::from_file(&path).unwrap().read().unwrap();
+    let _ = std::fs::remove_file(&path);
+    let Some(ObjectType::ObjectContextData(read)) = loaded.objects.get(&handle) else {
+        panic!("context data not read back");
+    };
+    let ObjectContextKind::Text { horizontal_mode, rotation, insertion, alignment } = &read.kind else {
+        panic!("wrong kind")
+    };
+    assert_eq!(*horizontal_mode, 2);
+    assert!((rotation - std::f64::consts::FRAC_PI_6).abs() < 1e-12);
+    assert_eq!(*insertion, Vector2::new(147.5, 10.25));
+    assert_eq!(*alignment, Vector2::new(150.0, 12.5));
+}
+
+#[test]
+fn text_context_data_reads_autocad_and_marked_layouts() {
+    use acadrust::objects::ObjectContextKind;
+    let marked = AUTOCAD_TEXT_CONTEXT.replace(
+        "340\nB7\n",
+        "340\nB7\n100\nAcDbTextObjectContextData\n",
+    );
+    for (name, text) in [("autocad", AUTOCAD_TEXT_CONTEXT.to_string()), ("marked", marked)] {
+        let path = std::env::temp_dir().join(format!("acadrust_text_context_{name}.dxf"));
+        std::fs::write(&path, text.as_bytes()).unwrap();
+        let loaded = DxfReader::from_file(&path).unwrap().read().unwrap();
+        let _ = std::fs::remove_file(&path);
+        let read = loaded
+            .objects
+            .values()
+            .find_map(|o| match o {
+                ObjectType::ObjectContextData(c) => Some(c.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name}: context data not read"));
+        let ObjectContextKind::Text { horizontal_mode, rotation, insertion, alignment } = read.kind else {
+            panic!("{name}: wrong kind")
+        };
+        assert_eq!(horizontal_mode, 2, "{name}");
+        assert!((rotation - 30f64.to_radians()).abs() < 1e-12, "{name}");
+        assert_eq!(insertion, Vector2::new(147.5, 10.25), "{name}");
+        assert_eq!(alignment, Vector2::new(150.0, 12.5), "{name}");
+        assert_eq!(read.class_version, 4, "{name}");
+    }
+}
+
 #[test]
 fn r2007_table_records_do_not_claim_the_referenced_flag() {
     // R2007+ DWG no longer stores the "referenced" (64) bit. Reading must not

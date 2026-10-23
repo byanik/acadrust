@@ -7887,7 +7887,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 insertion,
                 alignment,
             } => {
-                self.writer.write_subclass("AcDbTextObjectContextData")?;
+                // AutoCAD writes these fields straight after the
+                // AcDbAnnotScaleObjectContextData groups, without an
+                // AcDbTextObjectContextData marker (AutoCAD 2025 rejects the
+                // object with one: "Missing DXF group code: 1").
                 self.writer.write_i16(70, *horizontal_mode)?;
                 self.writer.write_double(50, rotation.to_degrees())?;
                 self.writer.write_double(10, insertion.x)?;
