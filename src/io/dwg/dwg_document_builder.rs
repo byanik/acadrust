@@ -3844,6 +3844,14 @@ impl DwgDocumentBuilder {
                     e.insertion_point = data.insert.insert_point;
                     e.normal = data.insert.normal;
                     e.horizontal_direction = data.horizontal_direction;
+                    e.dwg_block_placement = Some((
+                        data.insert.rotation,
+                        crate::types::Vector3::new(
+                            data.insert.x_scale,
+                            data.insert.y_scale,
+                            data.insert.z_scale,
+                        ),
+                    ));
                     if data.insert.block_handle != 0 {
                         e.block_record_handle = Some(Handle::from(data.insert.block_handle));
                     }

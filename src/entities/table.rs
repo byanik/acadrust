@@ -1444,6 +1444,11 @@ pub struct Table {
     pub insertion_point: Vector3,
     /// Horizontal direction vector.
     pub horizontal_direction: Vector3,
+    /// The block reference part's rotation (radians) and scale as a DWG stores them (the table is
+    /// an `AcDbBlockReference` of its anonymous block); `None` where the source has none (DXF, a
+    /// new table).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dwg_block_placement: Option<(f64, Vector3)>,
     /// Normal vector.
     pub normal: Vector3,
     /// Table style handle.
@@ -1736,6 +1741,7 @@ impl Table {
             common: EntityCommon::default(),
             insertion_point,
             horizontal_direction: Vector3::new(1.0, 0.0, 0.0),
+            dwg_block_placement: None,
             normal: Vector3::new(0.0, 0.0, 1.0),
             table_style_handle: None,
             block_record_handle: None,

@@ -84,6 +84,11 @@ path = "tests/annotative_context_dxf.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "table_block_placement"
+path = "tests/table_block_placement.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "anonymous_block_names"
 path = "tests/anonymous_block_names.rs"
 
