@@ -836,6 +836,17 @@ impl<'a> DwgObjectWriter<'a> {
 
     // â”€â”€ MText â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+    /// Whether an entity's extension dictionary holds an `AcDbContextDataManager` (its annotation
+    /// scale contexts; A5).
+    fn has_context_manager(&self, xdictionary: Option<Handle>) -> bool {
+        xdictionary
+            .and_then(|h| self.document.objects.get(&h))
+            .is_some_and(|o| {
+                matches!(o, crate::objects::ObjectType::Dictionary(d)
+                    if d.get("AcDbContextDataManager").is_some())
+            })
+    }
+
     fn write_mtext(&mut self, e: &MText) {
         self.entity_preamble(common::OBJ_MTEXT, &e.common);
 
@@ -915,11 +926,13 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2018+:
         if self.version.r2018_plus(self.dxf_version) {
+            // A5: an MTEXT with annotation scale contexts is annotative, whatever the flag says
+            let annotative = e.is_annotative || self.has_context_manager(e.common.xdictionary_handle);
             // Is NOT annotative B
-            self.writer.write_bit(!e.is_annotative);
+            self.writer.write_bit(!annotative);
 
             // IF MTEXT is not annotative: redundant fields + column data.
-            if !e.is_annotative {
+            if !annotative {
                 // Version BS (default 0; the reference implementation emits 4)
                 self.writer.write_bit_short(4);
                 // Default flag B (default true)

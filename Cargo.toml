@@ -89,6 +89,11 @@ path = "tests/table_block_placement.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "annotative_mtext_flag"
+path = "tests/annotative_mtext_flag.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "anonymous_block_names"
 path = "tests/anonymous_block_names.rs"
 
