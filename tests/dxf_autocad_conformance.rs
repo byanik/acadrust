@@ -376,6 +376,111 @@ fn text_context_data_reads_autocad_and_marked_layouts() {
     }
 }
 
+/// An MLEADER annotation context: text "ML" at (200,100) h 6 and one leader line from (180,80), the line's
+/// override flags `flags`.
+fn mleader_context(flags: LeaderLinePropertyOverrideFlags) -> MultiLeaderAnnotContext {
+    let mut ctx = MultiLeaderAnnotContext::new();
+    ctx.text_height = 6.0;
+    ctx.has_text_contents = true;
+    ctx.text_string = "ML".into();
+    ctx.text_location = Vector3::new(200.0, 100.0, 0.0);
+    let mut root = LeaderRoot::new(0);
+    root.connection_point = Vector3::new(192.5, 97.0, 0.0);
+    let mut line = LeaderLine::from_points(0, vec![Vector3::new(180.0, 80.0, 0.0)]);
+    line.override_flags = flags;
+    line.line_color = acadrust::types::Color::Index(1);
+    root.add_line(line);
+    ctx.leader_roots.push(root);
+    ctx
+}
+
+/// The group codes of each `LEADER_LINE{ ... }` of `rec` after its vertices, up to its `305 }`.
+fn leader_line_codes(rec: &Pairs) -> Vec<Vec<i32>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(k) = rec[i..].iter().position(|(c, v)| *c == 304 && v == "LEADER_LINE{") {
+        let start = i + k + 1;
+        let codes: Vec<i32> = rec[start..]
+            .iter()
+            .take_while(|(c, _)| *c != 305)
+            .map(|(c, _)| *c)
+            .filter(|c| ![10, 20, 30].contains(c))
+            .collect();
+        i = start + codes.len();
+        out.push(codes);
+    }
+    out
+}
+
+#[test]
+fn mleader_context_data_has_no_wrapper_and_autocad_leader_lines() {
+    use acadrust::objects::{ObjectContextData, ObjectContextKind};
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+    let scale = doc.allocate_handle();
+    let handle = doc.allocate_handle();
+    let context = ObjectContextData {
+        handle,
+        owner_handle: Handle::NULL,
+        reactors: Vec::new(),
+        xdictionary_handle: None,
+        class_version: 4,
+        is_default: true,
+        scale,
+        kind: ObjectContextKind::MLeader(mleader_context(LeaderLinePropertyOverrideFlags::NONE)),
+    };
+    doc.objects.insert(handle, ObjectType::ObjectContextData(context));
+    let mut ml = MultiLeader::new();
+    ml.context = mleader_context(LeaderLinePropertyOverrideFlags::LINE_COLOR);
+    doc.add_entity(EntityType::MultiLeader(Box::new(ml))).unwrap();
+    let pairs = write_pairs(&doc);
+    let rec = record(&pairs, handle);
+    // AutoCAD 2025 refuses the context object with the `300 CONTEXT_DATA{` .. `301 }` wrapper ("Premature end
+    // of object") and writes the body straight after the scale, without a subclass marker
+    assert!(
+        !rec.iter().any(|(c, v)| v == "AcDbMLeaderObjectContextData" || v == "CONTEXT_DATA{" || *c == 301),
+        "{rec:?}"
+    );
+    let after_scale: Vec<i32> = rec
+        .iter()
+        .skip_while(|(c, _)| *c != 340)
+        .skip(1)
+        .take(5)
+        .map(|(c, _)| *c)
+        .collect();
+    assert_eq!(after_scale, vec![40, 10, 20, 30, 41], "{rec:?}");
+    // a leader line without overrides is its vertices and its index (AutoCAD's own output)
+    assert_eq!(leader_line_codes(&rec), vec![vec![91]], "{rec:?}");
+    // the entity keeps its wrapper; its overridden colour is written with the flags
+    let start = pairs.iter().position(|(c, v)| *c == 0 && v == "MULTILEADER").unwrap();
+    let ent: Pairs = pairs[start + 1..].iter().take_while(|(c, _)| *c != 0).cloned().collect();
+    assert!(ent.iter().any(|(c, v)| *c == 300 && v == "CONTEXT_DATA{"), "{ent:?}");
+    assert_eq!(leader_line_codes(&ent), vec![vec![91, 92, 93]], "{ent:?}");
+
+    let path = std::env::temp_dir().join("acadrust_mleader_context_rt.dxf");
+    std::fs::write(&path, DxfWriter::new(&doc).write_to_vec().unwrap()).unwrap();
+    let loaded = DxfReader::from_file(&path).unwrap().read().unwrap();
+    let _ = std::fs::remove_file(&path);
+    let Some(ObjectType::ObjectContextData(read)) = loaded.objects.get(&handle) else {
+        panic!("context data not read back");
+    };
+    let ObjectContextKind::MLeader(ctx) = &read.kind else { panic!("wrong kind") };
+    assert_eq!(ctx.text_height, 6.0);
+    assert_eq!(ctx.text_string, "ML");
+    assert_eq!(ctx.text_location, Vector3::new(200.0, 100.0, 0.0));
+    assert_eq!(ctx.leader_roots.len(), 1);
+    assert_eq!(ctx.leader_roots[0].lines[0].points, vec![Vector3::new(180.0, 80.0, 0.0)]);
+    let ml = loaded
+        .entities()
+        .find_map(|e| match e {
+            EntityType::MultiLeader(m) => Some(m.as_ref().clone()),
+            _ => None,
+        })
+        .unwrap();
+    let line = &ml.context.leader_roots[0].lines[0];
+    assert_eq!(line.override_flags, LeaderLinePropertyOverrideFlags::LINE_COLOR);
+    assert_eq!(line.line_color, acadrust::types::Color::Index(1));
+}
+
 #[test]
 fn r2007_table_records_do_not_claim_the_referenced_flag() {
     // R2007+ DWG no longer stores the "referenced" (64) bit. Reading must not

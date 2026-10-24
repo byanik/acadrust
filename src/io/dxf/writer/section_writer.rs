@@ -7965,7 +7965,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 }
             }
             ObjectContextKind::MLeader(context) => {
-                self.writer.write_subclass("AcDbMLeaderObjectContextData")?;
+                // AutoCAD's layout: the context body straight after the scale, without a subclass marker
+                // and without the entity's `CONTEXT_DATA{ }` wrapper (AutoCAD 2025 refuses either)
                 self.write_mleader_context_data(context)?;
             }
             ObjectContextKind::MTextAttribute(value) => {
@@ -9116,11 +9117,56 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    /// One `LEADER_LINE{ ... }` of a MULTILEADER or its annotation context: the vertices, the breaks
+    /// and the index, then only the properties its override flags name, with the flags (AutoCAD
+    /// writes a line without overrides as its vertices and index alone).
+    fn write_mleader_leader_line(
+        &mut self,
+        line: &crate::entities::multileader::LeaderLine,
+    ) -> Result<()> {
+        use crate::entities::multileader::LeaderLinePropertyOverrideFlags as F;
+        self.writer.write_string(304, "LEADER_LINE{")?;
+        for point in &line.points {
+            self.writer.write_point3d(10, *point)?;
+        }
+        self.write_mleader_line_breaks(line)?;
+        self.writer.write_i32(91, line.index)?;
+        let flags = line.override_flags;
+        if flags.contains(F::PATH_TYPE) {
+            self.writer.write_i16(170, line.path_type as i16)?;
+        }
+        if flags.contains(F::LINE_COLOR) {
+            self.write_color_i32(92, line.line_color)?;
+        }
+        if flags.contains(F::LINE_TYPE) {
+            if let Some(handle) = line.line_type_handle {
+                self.writer.write_handle(340, handle)?;
+            }
+        }
+        if flags.contains(F::LINE_WEIGHT) {
+            self.writer.write_i16(171, line.line_weight.value())?;
+        }
+        if flags.contains(F::ARROWHEAD_SIZE) {
+            self.writer.write_double(40, line.arrowhead_size)?;
+        }
+        if flags.contains(F::ARROWHEAD) {
+            if let Some(handle) = line.arrowhead_handle {
+                self.writer.write_handle(341, handle)?;
+            }
+        }
+        if !flags.is_empty() {
+            self.writer.write_i32(93, flags.bits() as i32)?;
+        }
+        self.writer.write_string(305, "}")?;
+        Ok(())
+    }
+
+    /// The body of an `ACDB_MLEADEROBJECTCONTEXTDATA_CLASS` object, in AutoCAD's layout: the
+    /// MULTILEADER's context groups without the entity's `300 CONTEXT_DATA{` / `301 }` wrapper.
     fn write_mleader_context_data(
         &mut self,
         ctx: &crate::entities::multileader::MultiLeaderAnnotContext,
     ) -> Result<()> {
-        self.writer.write_string(300, "CONTEXT_DATA{")?;
         self.writer.write_double(40, ctx.scale_factor)?;
         self.writer.write_point3d(10, ctx.content_base_point)?;
         self.writer.write_double(41, ctx.text_height)?;
@@ -9203,25 +9249,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             self.writer.write_double(40, root.landing_distance)?;
             for line in &root.lines {
-                self.writer.write_string(304, "LEADER_LINE{")?;
-                for point in &line.points {
-                    self.writer.write_point3d(10, *point)?;
-                }
-                self.write_mleader_line_breaks(line)?;
-                self.writer.write_i32(91, line.index)?;
-                self.writer.write_i16(170, line.path_type as i16)?;
-                self.write_color_i32(92, line.line_color)?;
-                if let Some(handle) = line.line_type_handle {
-                    self.writer.write_handle(340, handle)?;
-                }
-                self.writer.write_i16(171, line.line_weight.value())?;
-                self.writer.write_double(40, line.arrowhead_size)?;
-                if let Some(handle) = line.arrowhead_handle {
-                    self.writer.write_handle(341, handle)?;
-                }
-                self.writer
-                    .write_i32(93, line.override_flags.bits() as i32)?;
-                self.writer.write_string(305, "}")?;
+                self.write_mleader_leader_line(line)?;
             }
             if self.dxf_version >= DxfVersion::AC1024 {
                 self.writer
@@ -9235,7 +9263,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 .write_i16(272, ctx.text_bottom_attachment as i16)?;
             self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
         }
-        self.writer.write_string(301, "}")?;
         Ok(())
     }
 
@@ -9351,28 +9378,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
             // Leader lines
             for line in &root.lines {
-                self.writer.write_string(304, "LEADER_LINE{")?;
-
-                // Vertex points
-                for pt in &line.points {
-                    self.writer.write_point3d(10, *pt)?;
-                }
-
-                self.write_mleader_line_breaks(line)?;
-
-                // Per-line properties
-                self.writer.write_i32(91, line.index)?;
-                self.writer.write_i16(170, line.path_type as i16)?;
-                self.write_color_i32(92, line.line_color)?;
-                self.writer
-                    .write_handle(340, line.line_type_handle.unwrap_or(Handle::NULL))?;
-                self.writer.write_i16(171, line.line_weight.value())?;
-                self.writer.write_double(40, line.arrowhead_size)?;
-                self.writer
-                    .write_handle(341, line.arrowhead_handle.unwrap_or(Handle::NULL))?;
-                self.writer
-                    .write_i32(93, line.override_flags.bits() as i32)?;
-                self.writer.write_string(305, "}")?;
+                self.write_mleader_leader_line(line)?;
             }
 
             if self.dxf_version >= DxfVersion::AC1024 {

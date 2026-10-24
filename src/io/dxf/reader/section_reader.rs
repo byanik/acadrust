@@ -4964,6 +4964,7 @@ impl<'a> SectionReader<'a> {
         let mut owner_seen = false;
         let is_mleader = dxf_name.eq_ignore_ascii_case("ACDB_MLEADEROBJECTCONTEXTDATA_CLASS");
         let mut mleader_context = crate::entities::multileader::MultiLeaderAnnotContext::new();
+        let mut body_read = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -4987,7 +4988,24 @@ impl<'a> SectionReader<'a> {
                     owner_seen = true;
                 }
                 300 if is_mleader && pair.value_string.starts_with("CONTEXT_DATA") => {
+                    // older output of this fork: the body inside the entity's wrapper
                     self.read_mleader_context(&mut mleader_context)?;
+                    body_read = true;
+                }
+                340 if is_mleader
+                    && !body_read
+                    && section == "AcDbAnnotScaleObjectContextData" =>
+                {
+                    fields.push(&section, pair.code, pair.value_string);
+                    // AutoCAD's layout: the body follows the scale directly, up to the object's end
+                    if let Some(next) = self.reader.read_pair()? {
+                        let inline = !matches!(next.code, 0 | 100 | 300);
+                        self.reader.push_back(next);
+                        if inline {
+                            self.read_mleader_context(&mut mleader_context)?;
+                            body_read = true;
+                        }
+                    }
                 }
                 _ => fields.push(&section, pair.code, pair.value_string),
             }
