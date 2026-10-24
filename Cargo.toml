@@ -94,6 +94,11 @@ path = "tests/annotative_mtext_flag.rs"
 required-features = ["writers"]
 
 [[test]]
+name = "minsert_attribs"
+path = "tests/minsert_attribs.rs"
+required-features = ["writers"]
+
+[[test]]
 name = "anonymous_block_names"
 path = "tests/anonymous_block_names.rs"
 

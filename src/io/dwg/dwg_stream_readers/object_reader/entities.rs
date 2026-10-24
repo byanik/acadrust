@@ -123,6 +123,9 @@ pub struct InsertData {
     pub rotation: f64,
     pub normal: Vector3,
     pub has_attribs: bool,
+    /// R2004+ with attributes: the owned object count (`BL`), which the record stores right after
+    /// the has-attributes bit, before an MINSERT's grid (this fork, I1).
+    pub owned_count: i32,
     pub block_handle: u64,
 }
 
@@ -1131,6 +1134,13 @@ pub fn read_insert(reader: &mut DwgMergedReader, version: DwgVersion) -> InsertD
     let rotation = reader.read_bit_double();
     let normal = reader.read_3bit_double();
     let has_attribs = reader.read_bit();
+    // R2004+: the owned object count follows when the reference has attributes (ODA spec, INSERT
+    // and MINSERT); an MINSERT's column and row counts and spacings come after it
+    let owned_count = if version.r2004_plus() && has_attribs {
+        reader.read_bit_long()
+    } else {
+        0
+    };
     let block_handle = reader.read_handle();
 
     InsertData {
@@ -1141,6 +1151,7 @@ pub fn read_insert(reader: &mut DwgMergedReader, version: DwgVersion) -> InsertD
         rotation,
         normal,
         has_attribs,
+        owned_count,
         block_handle,
     }
 }
