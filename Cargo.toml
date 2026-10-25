@@ -634,6 +634,10 @@ name = "hardening_z1_record"
 path = "tests/hardening_z1_record.rs"
 required-features = ["fuzzing"]
 
+[[test]]
+name = "hardening_h8_class_counts"
+path = "tests/hardening_h8_class_counts.rs"
+
 [dependencies.anyhow]
 version = "1.0"
 

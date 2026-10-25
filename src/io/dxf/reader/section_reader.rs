@@ -626,10 +626,32 @@ struct ClassDxfFields {
         String,
         std::collections::HashMap<i32, std::collections::VecDeque<String>>,
     >,
+    /// Values queued for this object.
+    pushed: usize,
+    /// Loop items granted by `count`/`clamp_count` so far.
+    granted: usize,
 }
 
 impl ClassDxfFields {
+    /// Caps a count stored in the object at `cap` and at what the object can
+    /// still describe: every counted item reads at least one queued value, so
+    /// the counts granted to one object never sum past the values it carried.
+    /// A hostile count (or one reused for every column, or nested counts) is
+    /// thereby bounded by the input actually read instead of `cap` squared.
+    fn clamp_count(&mut self, raw: i32, cap: i32) -> i32 {
+        let left = i32::try_from(self.pushed.saturating_sub(self.granted)).unwrap_or(i32::MAX);
+        let count = raw.clamp(0, cap).min(left);
+        self.granted += count as usize;
+        count
+    }
+
+    fn count(&mut self, section: &str, code: i32, cap: i32) -> i32 {
+        let raw = self.i32(section, code);
+        self.clamp_count(raw, cap)
+    }
+
     fn push(&mut self, section: &str, code: i32, value: String) {
+        self.pushed += 1;
         self.sections
             .entry(section.to_string())
             .or_default()
@@ -756,11 +778,11 @@ fn class_dxf_point_cloud_ramps(
     section: &str,
 ) -> Vec<PointCloudColorRamp> {
     let mut result = Vec::new();
-    for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+    for _ in 0..fields.count(section, 90, 100_000) {
         let id = fields.string(section, 1);
         let class_version = fields.i16(section, 70);
         let mut colors = Vec::new();
-        for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+        for _ in 0..fields.count(section, 90, 100_000) {
             let color = fields.i32(section, 91);
             colors.push(crate::objects::PointCloudRampColor {
                 color,
@@ -780,12 +802,12 @@ fn class_dxf_point_cloud_ramps(
 fn class_dxf_hatch_scale_context(fields: &mut ClassDxfFields) -> crate::objects::HatchScaleContext {
     let section = "AcDbHatchObjectContextData";
     let mut pattern_lines = Vec::new();
-    for _ in 0..fields.i32(section, 78).max(0).min(10_000) {
+    for _ in 0..fields.count(section, 78, 10_000) {
         let angle = fields.f64(section, 53).to_radians();
         let base_point = Vector2::new(fields.f64(section, 43), fields.f64(section, 44));
         let offset = Vector2::new(fields.f64(section, 45), fields.f64(section, 46));
         let mut dash_lengths = Vec::new();
-        for _ in 0..fields.i32(section, 79).max(0).min(10_000) {
+        for _ in 0..fields.count(section, 79, 10_000) {
             dash_lengths.push(fields.f64(section, 49));
         }
         pattern_lines.push(crate::entities::HatchPatternLine {
@@ -798,7 +820,7 @@ fn class_dxf_hatch_scale_context(fields: &mut ClassDxfFields) -> crate::objects:
     let pattern_scale = fields.f64(section, 40);
     let pattern_base = fields.point3(section, 10);
     let mut loops = Vec::new();
-    for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+    for _ in 0..fields.count(section, 90, 100_000) {
         let loop_type = fields.i32(section, 90);
         let supports_context = fields.bool(section, 290);
         loops.push(crate::objects::HatchLoopContext {
@@ -828,7 +850,7 @@ fn class_dxf_hatch_context_boundary(
         let has_bulge = fields.bool(section, 72);
         let is_closed = fields.bool(section, 73);
         let mut vertices = Vec::new();
-        for _ in 0..fields.i32(section, 93).max(0).min(100_000) {
+        for _ in 0..fields.count(section, 93, 100_000) {
             let point = fields.point2(section, 10);
             let bulge = if has_bulge {
                 fields.f64(section, 42)
@@ -844,7 +866,7 @@ fn class_dxf_hatch_context_boundary(
         return path;
     }
 
-    for _ in 0..fields.i32(section, 93).max(0).min(100_000) {
+    for _ in 0..fields.count(section, 93, 100_000) {
         match fields.i16(section, 72) {
             1 => path.add_edge(BoundaryEdge::Line(LineEdge {
                 start: fields.point2(section, 10),
@@ -869,8 +891,8 @@ fn class_dxf_hatch_context_boundary(
                 let degree = fields.i32(section, 94);
                 let rational = fields.bool(section, 73);
                 let periodic = fields.bool(section, 74);
-                let knot_count = fields.i32(section, 95).max(0).min(100_000);
-                let control_count = fields.i32(section, 96).max(0).min(100_000);
+                let knot_count = fields.count(section, 95, 100_000);
+                let control_count = fields.count(section, 96, 100_000);
                 let knots = (0..knot_count).map(|_| fields.f64(section, 40)).collect();
                 let control_points = (0..control_count)
                     .map(|_| {
@@ -886,7 +908,7 @@ fn class_dxf_hatch_context_boundary(
                         )
                     })
                     .collect();
-                let fit_count = fields.i32(section, 97).max(0).min(100_000);
+                let fit_count = fields.count(section, 97, 100_000);
                 let fit_points: Vec<_> =
                     (0..fit_count).map(|_| fields.point2(section, 11)).collect();
                 let (start_tangent, end_tangent) = if fit_points.is_empty() {
@@ -5079,7 +5101,7 @@ impl<'a> SectionReader<'a> {
                     let flow_reversed = fields.bool(section, 74);
                     let mut heights = Vec::new();
                     if !auto_height && column_type == 2 {
-                        for _ in 0..num_heights.max(0).min(100_000) {
+                        for _ in 0..fields.clamp_count(num_heights, 100_000) {
                             heights.push(fields.f64(section, 46));
                         }
                     }
@@ -5177,7 +5199,7 @@ impl<'a> SectionReader<'a> {
                         let flow_reversed = fields.bool(section, 74);
                         let mut heights = Vec::new();
                         if !auto_height && column_type == 2 {
-                            for _ in 0..num_heights.max(0).min(100_000) {
+                            for _ in 0..fields.clamp_count(num_heights, 100_000) {
                                 heights.push(fields.f64(section, 46));
                             }
                         }
@@ -5231,7 +5253,7 @@ impl<'a> SectionReader<'a> {
                     "AcDbAnnotScaleObjectContextData"
                 };
                 let mut points = Vec::new();
-                for _ in 0..fields.i32(section, 70).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 70, 100_000) {
                     points.push(fields.point3(section, 10));
                 }
                 ObjectContextKind::Leader(LeaderContext {
@@ -5325,7 +5347,7 @@ impl<'a> SectionReader<'a> {
                     fields.f64(section, 40),
                 );
                 let mut indexed_objects = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     indexed_objects.push(fields.handle(section, 330));
                 }
                 let _cached_binary_size = fields.i32(section, 90);
@@ -5340,7 +5362,7 @@ impl<'a> SectionReader<'a> {
             }
             "LAYERFILTER" => {
                 let section = "AcDbLayerFilter";
-                let count = fields.i32(section, 90).max(0).min(100_000);
+                let count = fields.count(section, 90, 100_000);
                 let mut names = Vec::new();
                 for _ in 0..count {
                     names.push(fields.string(section, 8));
@@ -5349,7 +5371,7 @@ impl<'a> SectionReader<'a> {
             }
             "PARTIAL_VIEWING_INDEX" => {
                 let section = "OdDbPartialViewingIndex";
-                let count = fields.i32(section, 90).max(0).min(100_000);
+                let count = fields.count(section, 90, 100_000);
                 let has_entries = fields.bool(section, 290);
                 let mut entries = Vec::new();
                 for _ in 0..count {
@@ -5379,7 +5401,7 @@ impl<'a> SectionReader<'a> {
                 let section = "AcDbSectionManager";
                 let is_live = fields.bool(section, 70);
                 let mut sections = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     sections.push(fields.handle(section, 330));
                 }
                 ClassObjectData::SectionManager(SectionManager { is_live, sections })
@@ -5387,20 +5409,20 @@ impl<'a> SectionReader<'a> {
             "SECTION_SETTINGS" => {
                 let section = "AcDbSectionSettings";
                 let current_type = fields.i32(section, 90);
-                let type_count = fields.i32(section, 91).max(0).min(4);
+                let type_count = fields.count(section, 91, 4);
                 let mut types = Vec::new();
                 for _ in 0..type_count {
                     let section_type = fields.i32(section, 90);
                     let generation = fields.i32(section, 91);
                     let mut sources = Vec::new();
-                    for _ in 0..fields.i32(section, 92).max(0).min(100_000) {
+                    for _ in 0..fields.count(section, 92, 100_000) {
                         sources.push(fields.handle(section, 330));
                     }
                     let destination_block = fields.handle(section, 331);
                     let destination_file =
                         fields.string_skipping(section, 1, &["SectionTypeSettings"]);
                     let mut geometry = Vec::new();
-                    for _ in 0..fields.i32(section, 93).max(0).min(100_000) {
+                    for _ in 0..fields.count(section, 93, 100_000) {
                         geometry.push(SectionGeometrySettings {
                             geometry_count: fields.i32(section, 90),
                             index: fields.i32(section, 91),
@@ -5442,7 +5464,7 @@ impl<'a> SectionReader<'a> {
                 let section = "AcDbLightList";
                 let class_version = fields.i32(section, 90);
                 let mut lights = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     lights.push(LightListEntry {
                         handle: fields.handle(section, 5),
                         name: fields.string(section, 1),
@@ -5775,10 +5797,10 @@ impl<'a> SectionReader<'a> {
                 let section = "AcDbContextDataManager";
                 let object_context = fields.handle(section, 340);
                 let mut sub_managers = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     let handle = fields.handle(section, 340);
                     let mut entries = Vec::new();
-                    for _ in 0..fields.i32(section, 91).max(0).min(100_000) {
+                    for _ in 0..fields.count(section, 91, 100_000) {
                         entries.push(ContextDataEntry {
                             item: fields.handle(section, 350),
                             name: fields.string(section, 3),
@@ -5808,7 +5830,7 @@ impl<'a> SectionReader<'a> {
                 };
                 let select_dates_from_calendar = fields.bool(section, 291);
                 let mut dates = Vec::new();
-                for _ in 0..fields.i32(section, 91).max(0).min(10_000) {
+                for _ in 0..fields.count(section, 91, 10_000) {
                     dates.push(SunStudyDate {
                         julian_day: fields.i32(section, 90),
                         milliseconds: fields.i32(section, 90),
@@ -5819,7 +5841,7 @@ impl<'a> SectionReader<'a> {
                 let end_time = fields.i32(section, 94);
                 let interval = fields.i32(section, 95);
                 let mut hours = Vec::new();
-                for _ in 0..fields.i32(section, 91).max(0).min(10_000) {
+                for _ in 0..fields.count(section, 91, 10_000) {
                     hours.push(fields.bool(section, 290));
                 }
                 ClassObjectData::SunStudy(SunStudy {
@@ -5853,7 +5875,7 @@ impl<'a> SectionReader<'a> {
             "DATATABLE" | "ACDBDATATABLE" => {
                 let section = "AcDbDataTable";
                 let flags = fields.i16(section, 70);
-                let column_count = fields.i32(section, 90).max(0).min(100_000);
+                let column_count = fields.count(section, 90, 100_000);
                 let row_count = fields.i32(section, 91);
                 let name = fields.string(section, 1);
                 let mut columns = Vec::new();
@@ -5868,7 +5890,7 @@ impl<'a> SectionReader<'a> {
                         })?;
                     let name = fields.string(section, 2);
                     let mut rows = Vec::new();
-                    for _ in 0..row_count.max(0).min(100_000) {
+                    for _ in 0..fields.clamp_count(row_count, 100_000) {
                         let mut value = DataTableValue::default();
                         match cell_type {
                             DataTableCellType::Integer => value.integer = fields.i32(section, 93),
@@ -5913,7 +5935,7 @@ impl<'a> SectionReader<'a> {
                 let status_flags = fields.i32(section, 93);
                 let update_status = fields.string(section, 304);
                 let mut custom_data = Vec::new();
-                for _ in 0..fields.i32(section, 94).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 94, 100_000) {
                     custom_data.push(DataLinkCustomData {
                         target: fields.handle(section, 330),
                         value: fields.string(section, 304),
@@ -5949,11 +5971,11 @@ impl<'a> SectionReader<'a> {
                 let associated_step_count = fields.i32(section, 90);
                 let associated_subentity_count = fields.i32(section, 90);
                 let mut steps = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     steps.push(fields.i32(section, 90));
                 }
                 let mut subentities = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     subentities.push(fields.i32(section, 90));
                 }
                 ClassObjectData::PersistentSubentityManager(PersistentSubentityManager {
@@ -6096,7 +6118,7 @@ impl<'a> SectionReader<'a> {
                 let hatch_scale = fields.f64(section, 40);
                 let hatch_transparency = fields.i32(section, 90);
                 let mut hatch_angles = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     hatch_angles.push(fields.f64(section, 40));
                 }
                 ClassObjectData::SectionViewStyle(ClassSectionViewStyle {
@@ -6182,11 +6204,11 @@ impl<'a> SectionReader<'a> {
                 let geometry_version = fields.i32(section, 90);
                 let geometry_marker = fields.i32(section, 90);
                 let mut sketches = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     let id = fields.i32(section, 90);
                     let sketch_version = fields.i32(section, 90);
                     let mut references = Vec::new();
-                    for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                    for _ in 0..fields.count(section, 90, 100_000) {
                         references.push(ViewRepSketchReference {
                             object: fields.handle(section, 330),
                             flag: fields.bool(section, 290),
@@ -6221,7 +6243,7 @@ impl<'a> SectionReader<'a> {
                                 fields.i32(section, 90),
                             ];
                             let mut knots = Vec::new();
-                            for _ in 0..knot_header[0].max(0).min(100_000) {
+                            for _ in 0..fields.clamp_count(knot_header[0], 100_000) {
                                 knots.push(fields.f64(section, 40));
                             }
                             let weight_header = [
@@ -6230,7 +6252,7 @@ impl<'a> SectionReader<'a> {
                                 fields.i32(section, 90),
                             ];
                             let mut weights = Vec::new();
-                            for _ in 0..weight_header[0].max(0).min(100_000) {
+                            for _ in 0..fields.clamp_count(weight_header[0], 100_000) {
                                 weights.push(fields.f64(section, 40));
                             }
                             let point_header = [
@@ -6239,7 +6261,7 @@ impl<'a> SectionReader<'a> {
                                 fields.i32(section, 90),
                             ];
                             let mut control_points = Vec::new();
-                            for _ in 0..point_header[0].max(0).min(100_000) {
+                            for _ in 0..fields.clamp_count(point_header[0], 100_000) {
                                 control_points.push(fields.point3(section, 10));
                             }
                             ViewRepSketchGeometry::Nurb {
@@ -6279,9 +6301,10 @@ impl<'a> SectionReader<'a> {
                 let projection = fields.i16(section, 70);
                 let linked_views = [fields.handle(section, 330), fields.handle(section, 330)];
                 let mut section_sketches = Vec::new();
-                for _ in 0..fields.i32(section, 90).max(0).min(100_000) {
+                for _ in 0..fields.count(section, 90, 100_000) {
                     let class_name = fields.string(section, 1);
-                    let path_count = fields.i16(section, 70).max(0).min(10_000) as usize;
+                    let path_count = fields.i16(section, 70);
+                    let path_count = fields.clamp_count(i32::from(path_count), 10_000) as usize;
                     let mut objects = Vec::with_capacity(path_count.saturating_add(1));
                     for _ in 0..=path_count {
                         objects.push(fields.handle(section, 330));
@@ -6310,7 +6333,7 @@ impl<'a> SectionReader<'a> {
                     let class_name = fields.string(section, 1);
                     let version = fields.i32(section, 90);
                     let mut entries = Vec::new();
-                    for _ in 0..fields.i32(section, 91).max(0).min(100_000) {
+                    for _ in 0..fields.count(section, 91, 100_000) {
                         entries.push(ViewRepBlockPathEntry {
                             flag: fields.i32(section, 281) as u8,
                             kind: fields.i32(section, 280) as u8,
@@ -6459,7 +6482,7 @@ impl<'a> SectionReader<'a> {
             "ACDBSYMODELSPACEVIEWSELSET" => {
                 let section = "AcDbViewRepModelSpaceViewSelSet";
                 let version = fields.i32(section, 90);
-                let count = fields.i32(section, 90).max(0).min(100_000);
+                let count = fields.count(section, 90, 100_000);
                 let mut entities = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     entities.push(fields.handle(section, 330));

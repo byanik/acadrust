@@ -151,6 +151,18 @@ impl<'a> AssocCursor<'a> {
         Vector3::new(self.f64(code), self.f64(code + 10), self.f64(code + 20))
     }
 
+    /// Entries not yet read.
+    fn remaining(&self) -> i32 {
+        i32::try_from(self.entries.len().saturating_sub(self.position)).unwrap_or(i32::MAX)
+    }
+
+    /// A count read from `code`, capped at `cap` and at the entries left: every
+    /// counted item reads at least one entry, so a larger count is hostile.
+    fn count(&mut self, code: i32, cap: i32) -> i32 {
+        let raw = self.i32(code);
+        raw.clamp(0, cap).min(self.remaining())
+    }
+
     fn peek_code(&self) -> Option<i32> {
         self.entries.get(self.position).map(|entry| entry.0)
     }
@@ -229,7 +241,7 @@ fn read_value_param(cursor: &mut AssocCursor<'_>) -> AssocValueParam {
     let class_version = cursor.i32(90);
     let name = cursor.text(1);
     let unit_type = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let tail = &cursor.entries[cursor.position..];
     // Each variable and the controlled dependency require one handle; any
     // additional handles are values. The next parameter starts with 90, 1.
@@ -302,7 +314,7 @@ fn read_constraint_common(
     } else {
         0
     };
-    let connection_count = cursor.i32(90).max(0).min(100_000);
+    let connection_count = cursor.count(90, 100_000);
     let mut connections = Vec::with_capacity(connection_count as usize);
     for _ in 0..connection_count {
         connections.push(cursor.i32(90));
@@ -322,7 +334,7 @@ fn read_constraint_common(
 
 fn read_constraint_root(cursor: &mut AssocCursor<'_>) -> AssocConstraintNode {
     let node_id = cursor.i32(90);
-    let connection_count = cursor.i32(90).max(0).min(100_000);
+    let connection_count = cursor.count(90, 100_000);
     let mut connections = Vec::with_capacity(connection_count as usize);
     for _ in 0..connection_count {
         connections.push(cursor.i32(90));
@@ -378,7 +390,7 @@ fn read_constraint_data(cursor: &mut AssocCursor<'_>, class_name: &str) -> Assoc
     match class_name.to_ascii_uppercase().as_str() {
         "ACG2SMOOTHCONSTRAINT" => {
             let (owner_id, is_implied, is_active) = read_constraint_geometry(cursor);
-            let count = cursor.i32(90).max(0).min(100_000);
+            let count = cursor.count(90, 100_000);
             let mut owned_constraint_ids = Vec::with_capacity(count as usize);
             for _ in 0..count {
                 owned_constraint_ids.push(cursor.i32(90));
@@ -457,7 +469,7 @@ fn read_constraint_data(cursor: &mut AssocCursor<'_>, class_name: &str) -> Assoc
             for value in &mut transform {
                 *value = cursor.f64(40);
             }
-            let count = cursor.i32(90).max(0).min(100_000);
+            let count = cursor.count(90, 100_000);
             let mut geometry_ids = Vec::with_capacity(count as usize);
             for _ in 0..count {
                 geometry_ids.push(cursor.i32(90));
@@ -559,28 +571,28 @@ fn read_constraint_data(cursor: &mut AssocCursor<'_>, class_name: &str) -> Assoc
             let periodic = cursor.bool(70);
             let degree = cursor.i32(90);
             let knot_tolerance = cursor.f64(40);
-            let knot_count = cursor.i32(90).max(0).min(100_000);
+            let knot_count = cursor.count(90, 100_000);
             let knot_physical_length = cursor.i32(90);
             let knot_grow_length = cursor.i32(90);
             let mut knots = Vec::with_capacity(knot_count as usize);
             for _ in 0..knot_count {
                 knots.push(cursor.f64(40));
             }
-            let weight_count = cursor.i32(90).max(0).min(100_000);
+            let weight_count = cursor.count(90, 100_000);
             let weight_physical_length = cursor.i32(90);
             let weight_grow_length = cursor.i32(90);
             let mut weights = Vec::with_capacity(weight_count as usize);
             for _ in 0..weight_count {
                 weights.push(cursor.f64(40));
             }
-            let control_point_count = cursor.i32(90).max(0).min(100_000);
+            let control_point_count = cursor.count(90, 100_000);
             let control_point_physical_length = cursor.i32(90);
             let control_point_grow_length = cursor.i32(90);
             let mut control_points = Vec::with_capacity(control_point_count as usize);
             for _ in 0..control_point_count {
                 control_points.push(cursor.point3(10));
             }
-            let implicit_point_count = cursor.i32(90).max(0).min(100_000);
+            let implicit_point_count = cursor.count(90, 100_000);
             let mut implicit_point_ids = Vec::with_capacity(implicit_point_count as usize);
             for _ in 0..implicit_point_count {
                 implicit_point_ids.push(cursor.i32(90));
@@ -624,7 +636,7 @@ fn read_action(record: &AssocDxfRecord) -> AssocAction {
     let action_body = cursor.handle(360);
     let action_index = cursor.i32(90);
     let max_dependency_index = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let mut dependencies = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let mut dependency = Handle::NULL;
@@ -646,13 +658,13 @@ fn read_action(record: &AssocDxfRecord) -> AssocAction {
     let mut values = Vec::new();
     if class_version > 1 {
         let _zero = cursor.i16(90);
-        let count = cursor.i32(90).max(0).min(100_000);
+        let count = cursor.count(90, 100_000);
         owned_parameters.reserve(count as usize);
         for _ in 0..count {
             owned_parameters.push(cursor.handle(360));
         }
         let _zero = cursor.i16(90);
-        let count = cursor.i32(90).max(0).min(100_000);
+        let count = cursor.count(90, 100_000);
         values.reserve(count as usize);
         for _ in 0..count {
             values.push(read_value_param(&mut cursor));
@@ -678,7 +690,7 @@ fn skip_action(cursor: &mut AssocCursor<'_>) {
     let _action_body = cursor.handle(360);
     let _action_index = cursor.i32(90);
     let _max_dependency_index = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     for _ in 0..count {
         if cursor.peek_code() == Some(360) {
             let _dependency = cursor.handle(360);
@@ -688,12 +700,12 @@ fn skip_action(cursor: &mut AssocCursor<'_>) {
     }
     if class_version > 1 {
         let _zero = cursor.i16(90);
-        let owned_count = cursor.i32(90).max(0).min(100_000);
+        let owned_count = cursor.count(90, 100_000);
         for _ in 0..owned_count {
             let _parameter = cursor.handle(360);
         }
         let _zero = cursor.i16(90);
-        let value_count = cursor.i32(90).max(0).min(100_000);
+        let value_count = cursor.count(90, 100_000);
         for _ in 0..value_count {
             let _value = read_value_param(cursor);
         }
@@ -769,13 +781,13 @@ fn read_parameter_body(record: &AssocDxfRecord) -> AssocParamBasedActionBody {
     let mut cursor = AssocCursor::new(record, "AcDbAssocParamBasedActionBody");
     let version = cursor.i32(90);
     let minor = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let mut dependencies = Vec::with_capacity(count as usize);
     for _ in 0..count {
         dependencies.push(cursor.handle(360));
     }
     let marker = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let (empty_value_marker, dependency) = if count == 0 {
         (cursor.i32(90), cursor.handle(330))
     } else {
@@ -800,7 +812,7 @@ fn read_compound(record: &AssocDxfRecord) -> AssocCompoundActionParam {
     let mut cursor = AssocCursor::new(record, "AcDbAssocCompoundActionParam");
     let class_version = cursor.i16(90);
     let status = cursor.i16(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let mut parameters = Vec::with_capacity(count as usize);
     for _ in 0..count {
         parameters.push(cursor.handle(360));
@@ -927,7 +939,7 @@ fn read_array_parameters(record: &AssocDxfRecord) -> AssocArrayParameters {
     let section = "AcDbAssocArrayCommonParameters";
     let mut cursor = AssocCursor::new(record, section);
     let version = cursor.i32(90);
-    let count = cursor.i32(90).max(0).min(100_000);
+    let count = cursor.count(90, 100_000);
     let class_name = cursor.text(1);
     let items = (0..count).map(|_| read_array_item(&mut cursor)).collect();
     AssocArrayParameters {
@@ -1182,7 +1194,7 @@ impl<'a> SectionReader<'a> {
                 let mut cursor = AssocCursor::new(&record, "AcDbAssocNetwork");
                 let network_version = cursor.i16(90);
                 let network_action_index = cursor.i32(90);
-                let count = cursor.i32(90).max(0).min(100_000);
+                let count = cursor.count(90, 100_000);
                 let mut actions = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     let mut dependency = Handle::NULL;
@@ -1200,7 +1212,7 @@ impl<'a> SectionReader<'a> {
                         dependency,
                     });
                 }
-                let count = cursor.i32(90).max(0).min(100_000);
+                let count = cursor.count(90, 100_000);
                 let mut owned_actions = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     owned_actions.push(cursor.handle(330));
@@ -1234,6 +1246,9 @@ impl<'a> SectionReader<'a> {
                     .min(100_000);
                 let ids = record.values("AcDbAssocMLeaderActionBody", 90);
                 let handles = record.values("AcDbAssocMLeaderActionBody", 330);
+                // Each action takes an id (after the two header values) or a handle.
+                let count = count
+                    .min(i32::try_from(ids.len().saturating_sub(2).max(handles.len())).unwrap_or(i32::MAX));
                 let mut actions = Vec::with_capacity(count as usize);
                 for index in 0..count as usize {
                     actions.push(AssocAnnotationDependency {
@@ -1368,17 +1383,17 @@ impl<'a> SectionReader<'a> {
                     point.z = cursor.f64(30);
                 }
                 let dependency = cursor.handle(360);
-                let count = cursor.i32(90).max(0).min(100_000);
+                let count = cursor.count(90, 100_000);
                 let mut actions = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     actions.push(cursor.handle(360));
                 }
-                let node_count = cursor.i32(90).max(0).min(100_000);
+                let node_count = cursor.count(90, 100_000);
                 let mut nodes = Vec::with_capacity(node_count as usize);
                 if node_count > 0 {
                     nodes.push(read_constraint_root(&mut cursor));
                     let after_root = cursor.position;
-                    let registered_count = cursor.i32(90).max(0).min(100_000);
+                    let registered_count = cursor.count(90, 100_000);
                     let has_registry =
                         registered_count <= node_count && cursor.peek_code() == Some(1);
                     if has_registry {
@@ -1544,9 +1559,11 @@ impl<'a> SectionReader<'a> {
                 let parameter_block = cursor.text(1);
                 let has_items = cursor.peek_code() == Some(90);
                 let item_list_version = if has_items { cursor.i32(90) } else { 0 };
-                let count = if has_items { cursor.i32(90).max(0).min(100_000) } else { 0 };
+                let count = if has_items { cursor.i32(90).clamp(0, 100_000) } else { 0 };
                 let item_class = if has_items { cursor.text(1) } else { String::new() };
                 let mut item_cursor = AssocCursor::new(&record, "AcDbAssocArrayItem");
+                // The items are read from their own section: cap by its entries.
+                let count = count.min(item_cursor.remaining());
                 let items: Vec<_> = (0..count).map(|_| read_array_item(&mut item_cursor)).collect();
                 let matrix_cursor = if count > 0 { &mut item_cursor } else { &mut cursor };
                 let mut matrix = [0.0; 16];
@@ -1568,7 +1585,7 @@ impl<'a> SectionReader<'a> {
                 if canonical == "ASSOCARRAYMODIFYACTIONBODY" {
                     let mut cursor = AssocCursor::new(&record, "AcDbAssocArrayModifyActionBody");
                     let status = cursor.i16(70);
-                    let count = cursor.i32(90).max(0).min(100_000);
+                    let count = cursor.count(90, 100_000);
                     let mut item_locations = Vec::with_capacity(count as usize);
                     for _ in 0..count {
                         item_locations.push([cursor.i32(90), cursor.i32(90), cursor.i32(90)]);
@@ -1643,7 +1660,7 @@ impl<'a> SectionReader<'a> {
             "ASSOCVIEWREPHATCHMANAGER" => {
                 let mut cursor = AssocCursor::new(&record, "AcDbAssocViewRepHatchManager");
                 let class_version = cursor.i16(70);
-                let count = cursor.i32(90).max(0).min(100_000);
+                let count = cursor.count(90, 100_000);
                 let mut items = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     items.push(AssocViewRepHatchManagerItem {
