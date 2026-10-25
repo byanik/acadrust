@@ -103,7 +103,7 @@ impl<'a> DxfWriter<'a> {
         #[cfg(feature = "writer-dwg")]
         let mut prepared = crate::io::loft_parameters::prepared(self.document);
         // Without the DWG writer there is no embedded-entity encoder, so solid/loft history is not
-        // re-stored on the output copy (this fork's DXF export writes no surfaces or history).
+        // re-stored on the output copy (enable writer-dwg for documents with surfaces or history).
         #[cfg(not(feature = "writer-dwg"))]
         let mut prepared = std::borrow::Cow::Borrowed(self.document);
         // DXF and DWG share the same ownership graph. Repair table-backed

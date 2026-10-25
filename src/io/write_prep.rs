@@ -1,6 +1,6 @@
 //! Output-copy repairs shared by the DXF and DWG writers: document-model fixes (two-way
 //! references, stale table keys, active viewport elevation) with no file-format encoding.
-//! Moved out of `dwg::dwg_writer` (this fork) so the DXF writer builds without the DWG
+//! Moved out of `dwg::dwg_writer` (fork patch W1) so the DXF writer builds without the DWG
 //! writer (`writer-dxf` without `writer-dwg`).
 
 use crate::document::CadDocument;

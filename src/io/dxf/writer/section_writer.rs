@@ -2974,7 +2974,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             return self.write_acis_data(acis_data);
         }
         // The embedded-entity encoder writes DWG bit streams and lives with the DWG writer; a
-        // DXF-only build writes the record as absent (this fork's export writes no history).
+        // DXF-only build writes the record as absent (a consumer that needs history enables writer-dwg).
         #[cfg(not(feature = "writer-dwg"))]
         {
             let _ = size_code;
