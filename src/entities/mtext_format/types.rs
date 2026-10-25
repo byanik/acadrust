@@ -18,7 +18,7 @@ use std::fmt::Write;
 ///
 /// These are escape sequences in MTEXT/TEXT strings that represent special symbols.
 /// Only `%%c` (diameter Ø), `%%d` (degree °), and `%%p` (plus-minus ±) are
-/// valid special characters. `%%%%` produces a literal percent sign.
+/// valid special characters. `%%%` produces a literal percent sign.
 ///
 /// Note: `%%o`, `%%u`, `%%k` are TEXT entity formatting codes and are NOT
 /// valid in MTEXT. MTEXT uses `\L`/`\l`, `\O`/`\o`, `\K`/`\k` instead.
@@ -31,7 +31,7 @@ pub enum SpecialChar {
     PlusMinus,
     /// Diameter symbol (Ø) — `%%c`
     Diameter,
-    /// Literal percent sign (%) — `%%%%`
+    /// Literal percent sign (%) — `%%%`
     Percent,
 }
 
@@ -63,7 +63,7 @@ impl SpecialChar {
             SpecialChar::Degree => "%%d",
             SpecialChar::PlusMinus => "%%p",
             SpecialChar::Diameter => "%%c",
-            SpecialChar::Percent => "%%%%",
+            SpecialChar::Percent => "%%%",
         }
     }
 }
@@ -1286,7 +1286,7 @@ mod tests {
         assert_eq!(SpecialChar::Degree.to_string(), "%%d");
         assert_eq!(SpecialChar::PlusMinus.to_string(), "%%p");
         assert_eq!(SpecialChar::Diameter.to_string(), "%%c");
-        assert_eq!(SpecialChar::Percent.to_string(), "%%%%");
+        assert_eq!(SpecialChar::Percent.to_string(), "%%%");
     }
 
     #[test]

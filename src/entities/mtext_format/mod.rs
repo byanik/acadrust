@@ -48,7 +48,7 @@
 //! | `%%c` | Diameter symbol (Ø) |
 //! | `%%d` | Degree symbol (°) |
 //! | `%%p` | Plus-minus symbol (±) |
-//! | `%%%%` | Literal percent sign (%) |
+//! | `%%%` | Literal percent sign (%) |
 //!
 //! # Escaping
 //!

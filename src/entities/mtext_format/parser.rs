@@ -111,7 +111,7 @@ impl MTextParser {
         }
         // TEXT entities: backslash is literal (no MTEXT `\` codes); only `%%`
         // control codes apply. `%%u`/`%%o` toggle underline/overline (each toggle
-        // starts a new span), `%%d`/`%%p`/`%%c` and `%%%%` resolve to symbols,
+        // starts a new span), `%%d`/`%%p`/`%%c` and `%%%` resolve to symbols,
         // `%%nnn` is a decimal character code, and `\P`/`\p` break paragraphs.
         // Underscoring/overscoring turn off automatically at the string end.
         let flush = |para: &mut MTextParagraph, text: &mut String, u: bool, o: bool| {
@@ -134,12 +134,10 @@ impl MTextParser {
             let ch = self.chars[self.pos];
 
             if ch == '%' && self.pos + 1 < n && self.chars[self.pos + 1] == '%' {
-                // `%%%%` → literal `%`.
-                if self.pos + 3 < n
-                    && self.chars[self.pos + 2] == '%'
-                    && self.chars[self.pos + 3] == '%'
-                {
-                    self.pos += 4;
+                // `%%%` → literal `%`, read left to right (AutoCAD: `%%%%` is `%%%`
+                // then a plain `%`, drawn as two percent signs).
+                if self.pos + 2 < n && self.chars[self.pos + 2] == '%' {
+                    self.pos += 3;
                     text.push('%');
                     continue;
                 }
@@ -316,16 +314,7 @@ impl MTextParser {
             self.pos += 2; // skip "%%"
 
             if self.pos < self.chars.len() {
-                // %%%% → literal %
-                if self.chars[self.pos] == '%'
-                    && self.pos + 1 < self.chars.len()
-                    && self.chars[self.pos + 1] == '%'
-                {
-                    self.pos += 2;
-                    self.text_buf.push('%');
-                    return;
-                }
-
+                // `%%%` → literal `%` (SpecialChar::Percent below); a fourth `%` is plain text
                 let code_char = self.chars[self.pos];
 
                 if let Some(special) = SpecialChar::from_char(code_char) {
@@ -1859,8 +1848,15 @@ mod tests {
 
     #[test]
     fn test_parse_special_percent() {
-        let doc = parse_mtext("{%%%%}", false);
+        let doc = parse_mtext("{%%%}", false);
         assert_eq!(doc.paragraphs[0].to_plain_text(), "%");
+        // left to right: `%%%` then a plain `%`
+        let doc = parse_mtext("{%%%%}", false);
+        assert_eq!(doc.paragraphs[0].to_plain_text(), "%%");
+        let doc = parse_plain_text("%%%%");
+        assert_eq!(doc.paragraphs[0].to_plain_text(), "%%");
+        let doc = parse_plain_text("5%%%");
+        assert_eq!(doc.paragraphs[0].to_plain_text(), "5%");
     }
 
     // ========================================================================
