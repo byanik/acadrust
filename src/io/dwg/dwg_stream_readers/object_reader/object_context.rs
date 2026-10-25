@@ -355,7 +355,7 @@ fn read_hatch(reader: &mut DwgMergedReader, version: DwgVersion) -> HatchScaleCo
     }
 }
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     //! The payloads are written bit by bit here from the layouts in the module documentation (not
     //! through the object writer), then decoded. The two-stream test streams pad the main stream to

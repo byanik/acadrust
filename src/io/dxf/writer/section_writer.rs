@@ -2973,19 +2973,29 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_i16(70, 1)?;
             return self.write_acis_data(acis_data);
         }
-        let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
-            entity,
-            crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
-                .unwrap_or(crate::io::dwg::DwgVersion::AC24),
-            self.dxf_version,
-        );
-        self.writer.write_i32(type_code, encoded.type_code)?;
-        self.writer
-            .write_i32(size_code, (encoded.bytes.len() * 8) as i32)?;
-        for chunk in encoded.bytes.chunks(127) {
-            self.writer.write_binary(310, chunk)?;
+        // The embedded-entity encoder writes DWG bit streams and lives with the DWG writer; a
+        // DXF-only build writes the record as absent (this fork's export writes no history).
+        #[cfg(not(feature = "writer-dwg"))]
+        {
+            let _ = size_code;
+            self.writer.write_i32(type_code, 0)
         }
-        Ok(())
+        #[cfg(feature = "writer-dwg")]
+        {
+            let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
+                entity,
+                crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                    .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                self.dxf_version,
+            );
+            self.writer.write_i32(type_code, encoded.type_code)?;
+            self.writer
+                .write_i32(size_code, (encoded.bytes.len() * 8) as i32)?;
+            for chunk in encoded.bytes.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+            Ok(())
+        }
     }
 
     fn write_dynamic_block_object_dxf(&mut self, object: &DynamicBlockObject) -> Result<()> {
@@ -10114,24 +10124,34 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_i16(70, 1)?;
             return self.write_acis_data(acis_data);
         }
-        let dwg_version = crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
-            .unwrap_or(crate::io::dwg::DwgVersion::AC24);
-        let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
-            entity,
-            dwg_version,
-            self.dxf_version,
-        );
-        let bit_length = if exact_bits {
-            encoded.bit_length
-        } else {
-            encoded.bytes.len() * 8
-        };
-        self.writer.write_i32(type_group, encoded.type_code)?;
-        self.writer.write_i32(90, bit_length as i32)?;
-        for chunk in encoded.bytes.chunks(127) {
-            self.writer.write_binary(310, chunk)?;
+        // See write_history_entity_dxf: no DWG bit-stream encoder in a DXF-only build.
+        #[cfg(not(feature = "writer-dwg"))]
+        {
+            let _ = exact_bits;
+            self.writer.write_i32(type_group, 0)?;
+            self.writer.write_i32(90, 0)
         }
-        Ok(())
+        #[cfg(feature = "writer-dwg")]
+        {
+            let dwg_version = crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                .unwrap_or(crate::io::dwg::DwgVersion::AC24);
+            let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
+                entity,
+                dwg_version,
+                self.dxf_version,
+            );
+            let bit_length = if exact_bits {
+                encoded.bit_length
+            } else {
+                encoded.bytes.len() * 8
+            };
+            self.writer.write_i32(type_group, encoded.type_code)?;
+            self.writer.write_i32(90, bit_length as i32)?;
+            for chunk in encoded.bytes.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+            Ok(())
+        }
     }
 
     fn write_acis_data(&mut self, acis: &AcisData) -> Result<()> {

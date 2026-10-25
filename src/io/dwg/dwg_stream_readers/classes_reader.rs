@@ -169,7 +169,7 @@ pub fn read_classes_with_encoding(
 //  Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_stream_writers::classes_writer;

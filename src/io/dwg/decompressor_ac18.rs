@@ -245,7 +245,7 @@ fn copy_match(
 //  Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
     use crate::io::dwg::compression::DwgLZ77AC18Compressor;

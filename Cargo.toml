@@ -41,7 +41,11 @@ repository = "https://github.com/hakanaktt/acadrust"
 [features]
 default = []
 import = ["dep:quick-xml"]
-writers = []
+# DXF writer only (this fork ships this). The DWG writer and everything that encodes DWG
+# binary records sit behind writer-dwg, which no shipped this fork target enables.
+writer-dxf = []
+writer-dwg = ["writer-dxf"]
+writers = ["writer-dwg"]
 fuzzing = []
 serde = [
     "dep:serde",

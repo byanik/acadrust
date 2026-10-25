@@ -638,7 +638,7 @@ impl DwgMergedReader {
 //  Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_stream_writers::bit_writer::DwgBitWriter;

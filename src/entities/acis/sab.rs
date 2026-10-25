@@ -1755,7 +1755,7 @@ fn read_tagged_double(data: &[u8], pos: &mut usize) -> Result<f64, SabError> {
 // Tests
 // ============================================================================
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
 

@@ -7,7 +7,7 @@ use crate::entities::{
 use crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader;
 use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_stream_readers::object_reader::{common, entities};
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 use crate::io::dwg::dwg_stream_writers::{DwgBitWriter, DwgMergedWriter};
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::types::{DxfVersion, Matrix3, Vector2, Vector3};
@@ -20,13 +20,13 @@ fn center_to_entity(center: Vector3, normal: Vector3) -> Vector3 {
     Matrix3::arbitrary_axis(normal).transpose() * center
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 fn center_to_world(center: Vector3, normal: Vector3) -> Vector3 {
     Matrix3::arbitrary_axis(normal) * center
 }
 
 /// Encoded embedded entity body, including exact meaningful bit length.
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub(crate) struct EncodedEmbeddedEntity {
     pub type_code: i32,
     pub bit_length: usize,
@@ -40,7 +40,7 @@ pub(crate) fn is_body_profile(type_code: i32) -> bool {
 /// Compare meaningful body bits without interpreting unused final-byte bits.
 /// Byte-sized records may include up to seven zero padding bits, but an
 /// otherwise different native layout must retain its original opaque body.
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 fn preserves_embedded_body(
     encoded: &EncodedEmbeddedEntity,
     type_code: i32,
@@ -72,7 +72,7 @@ fn preserves_embedded_body(
 
 /// A typed embedded REGION is kept only when re-encoding it reproduces the
 /// stored body bit for bit.
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 fn region_body_round_trips(
     entity: &EmbeddedEntity,
     type_code: i32,
@@ -87,7 +87,7 @@ fn region_body_round_trips(
 
 /// This fork (F16): without the `writers` feature the body cannot be
 /// re-encoded for the comparison, so an embedded REGION stays opaque.
-#[cfg(not(feature = "writers"))]
+#[cfg(not(feature = "writer-dwg"))]
 fn region_body_round_trips(
     _entity: &EmbeddedEntity,
     _type_code: i32,
@@ -329,7 +329,7 @@ mod hardening_tests {
     const EMPTY_REGION_BITS: usize = 5;
     const EMPTY_REGION_BYTES: [u8; 1] = [0xB0];
 
-    #[cfg(not(feature = "writers"))]
+    #[cfg(not(feature = "writer-dwg"))]
     #[test]
     fn region_bodies_stay_opaque_without_the_writers() {
         let region = EmbeddedEntity::Region(Region::new());
@@ -369,7 +369,7 @@ mod hardening_tests {
 
     /// The other half of the pair above: with the writers the same body re-encodes bit for bit
     /// and is kept as a typed REGION, which also proves the captured constants are current.
-    #[cfg(feature = "writers")]
+    #[cfg(feature = "writer-dwg")]
     #[test]
     fn region_bodies_are_typed_with_the_writers() {
         let decoded = decode_embedded_entity(
@@ -397,7 +397,7 @@ mod hardening_tests {
 }
 
 /// Encode one typed embedded entity to its type-specific DWG body.
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub(crate) fn encode_embedded_entity(
     entity: &EmbeddedEntity,
     version: DwgVersion,
@@ -499,7 +499,7 @@ pub(crate) fn encode_embedded_entity(
     }
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub(crate) fn write_embedded_bits_with_length(
     writer: &mut DwgMergedWriter,
     encoded: &EncodedEmbeddedEntity,
@@ -511,7 +511,7 @@ pub(crate) fn write_embedded_bits_with_length(
     }
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 fn write_lwpolyline(writer: &mut DwgBitWriter, entity: &LwPolyline, version: DwgVersion) {
     let has_widths = entity
         .vertices
@@ -594,7 +594,7 @@ fn write_lwpolyline(writer: &mut DwgBitWriter, entity: &LwPolyline, version: Dwg
     }
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 fn write_spline(
     writer: &mut DwgBitWriter,
     entity: &Spline,

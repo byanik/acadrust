@@ -100,16 +100,21 @@ impl<'a> DxfWriter<'a> {
         writer: &mut W,
         output_version: crate::types::DxfVersion,
     ) -> Result<()> {
+        #[cfg(feature = "writer-dwg")]
         let mut prepared = crate::io::loft_parameters::prepared(self.document);
+        // Without the DWG writer there is no embedded-entity encoder, so solid/loft history is not
+        // re-stored on the output copy (this fork's DXF export writes no surfaces or history).
+        #[cfg(not(feature = "writer-dwg"))]
+        let mut prepared = std::borrow::Cow::Borrowed(self.document);
         // DXF and DWG share the same ownership graph. Repair table-backed
         // entities before either writer snapshots handles, otherwise an
         // ACAD_TABLE can emit a null/nonexistent block-record pointer.
-        crate::io::dwg::dwg_writer::prepare_database_references(&mut prepared);
+        crate::io::write_prep::prepare_database_references(&mut prepared);
         // An in-place table rename leaves the entry keyed under its old name,
         // so entity layer/linetype lookups miss and reference a name the
         // written table no longer defines (issue #80).
-        crate::io::dwg::dwg_writer::prepare_table_keys(&mut prepared);
-        crate::io::dwg::dwg_writer::prepare_active_viewport_elevation(&mut prepared);
+        crate::io::write_prep::prepare_table_keys(&mut prepared);
+        crate::io::write_prep::prepare_active_viewport_elevation(&mut prepared);
         self.write_prepared_dxf(writer, prepared.as_ref(), output_version)
     }
 

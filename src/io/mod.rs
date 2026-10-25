@@ -15,15 +15,17 @@ mod loft_parameters;
 mod loft_surface_curves;
 pub mod read;
 mod surface_history;
+#[cfg(feature = "writer-dxf")]
+pub(crate) mod write_prep;
 
 #[cfg(feature = "import")]
 pub mod import;
 
 pub use dwg::DwgReader;
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub use dwg::DwgWriter;
 pub use dxf::DxfReader;
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dxf")]
 pub use dxf::DxfWriter;
 pub use read::{
     push_read_diagnostic, ReadDiagnostic, ReadOutcome, ReadStage, ReadStats, SourceFormat,

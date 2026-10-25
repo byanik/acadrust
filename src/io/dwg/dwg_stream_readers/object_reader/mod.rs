@@ -924,7 +924,7 @@ fn read_modular_unsigned(data: &[u8], width: usize, payload_bits: u32) -> Result
 //  Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
 

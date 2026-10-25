@@ -21448,7 +21448,7 @@ fn color_from_i32(v: i32) -> Color {
     }
 }
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
 

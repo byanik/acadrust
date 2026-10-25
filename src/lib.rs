@@ -159,7 +159,7 @@
 #![warn(rustdoc::missing_crate_level_docs)]
 // This fork (F16): without the `writers` feature the encode-side helpers
 // that only the DWG/DXF writers call stay compiled but unused.
-#![cfg_attr(not(feature = "writers"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(feature = "writer-dwg"), allow(dead_code, unused_imports))]
 // This fork (Z1): the single-record decode entry exists only with the `fuzzing` feature.
 #![cfg_attr(
     not(feature = "fuzzing"),
@@ -216,10 +216,10 @@ pub use layer_state::{LayerState, LayerStateLayer, LayerStateMask};
 
 // Re-export I/O types
 pub use io::dwg::{DwgReadOptions, DwgReader};
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub use io::dwg::DwgWriter;
 pub use io::dxf::{DxfReader, DxfReaderConfiguration};
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dxf")]
 pub use io::dxf::DxfWriter;
 pub use io::read::{
     push_read_diagnostic, ReadDiagnostic, ReadOutcome, ReadStage, ReadStats, SourceFormat,

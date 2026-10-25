@@ -1582,7 +1582,7 @@ pub fn read_vport_entity_header(
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
 
-#[cfg(all(test, feature = "writers"))]
+#[cfg(all(test, feature = "writer-dwg"))]
 mod tests {
     use super::*;
     use crate::io::dwg::dwg_reference_type::DwgReferenceType;

@@ -23,7 +23,7 @@ fn owned_history(document: &CadDocument, surface: Handle, history: Handle) -> Op
     }
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub(crate) fn has_references(document: &CadDocument) -> bool {
     document.entities().any(|entity| {
         let EntityType::Surface(surface) = entity else {
@@ -41,7 +41,7 @@ pub(crate) fn has_references(document: &CadDocument) -> bool {
     })
 }
 
-#[cfg(feature = "writers")]
+#[cfg(feature = "writer-dwg")]
 pub(crate) fn store(document: &mut CadDocument) {
     let references = document
         .entities()
