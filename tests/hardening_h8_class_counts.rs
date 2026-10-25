@@ -139,3 +139,26 @@ fn associative_counts_are_bounded_by_the_entries_left() {
     assert!(network.actions.len() <= 4);
     assert!(network.actions.capacity() <= 4);
 }
+
+#[test]
+fn a_section_line_point_count_reserves_at_most_the_shared_cap() {
+    let _guard = serial();
+    // H9: the third 90 of a SECTIONLINE reserved room for up to a million
+    // points per entity; it now reserves the reader's usual 1024 at most.
+    let entity = "0\nSECTIONLINE\n5\n2D\n8\n0\n100\nAcDbEntity\n100\nAcDbSectionSymbol\n\
+                  90\n1\n90\n0\n90\n1000000\n10\n1.0\n20\n2.0\n30\n0.0\n";
+    let text = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", entity.repeat(64));
+    let worker = std::thread::spawn(move || {
+        largest_alloc_during(|| {
+            no_panic("sectionline", || {
+                DxfReader::from_reader(std::io::Cursor::new(text.into_bytes()))
+                    .unwrap()
+                    .read()
+                    .unwrap()
+            })
+        })
+    });
+    let (document, largest) = worker.join().unwrap();
+    assert_eq!(document.entities().count(), 64);
+    assert!(largest < 1 << 20, "a {largest}-byte request");
+}

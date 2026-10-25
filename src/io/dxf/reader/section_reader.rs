@@ -11461,7 +11461,7 @@ impl<'a> SectionReader<'a> {
                             2 => {
                                 entity.raw_point_record_count = value;
                                 if let Ok(count) = usize::try_from(value) {
-                                    entity.points.reserve(count.min(1_000_000));
+                                    entity.points.reserve(count.min(DXF_COUNT_RESERVE_CAP));
                                 }
                             }
                             _ => {}
