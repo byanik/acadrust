@@ -5,6 +5,11 @@
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
+> **Modified version of acadrust (hardened fork).** Changes are licensed under MPL-2.0.
+> Each change is a separate `acadrust(<ID>):` commit listed in [PROVENANCE.md](PROVENANCE.md);
+> see [NOTICE](NOTICE) and [LICENSE](LICENSE). Upstream: https://github.com/hakanaktt/acadrust
+> (0.6.4). Released snapshots are the `v0.6.4-hardened.<N>` tags.
+
 **A pure Rust crate for reading, writing, and inspecting CAD files.**
 
 acadrust handles ASCII and binary DXF plus native binary DWG without requiring
